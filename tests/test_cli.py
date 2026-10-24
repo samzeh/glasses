@@ -40,6 +40,8 @@ def test_every_subcommand_parses():
         ("enroll-voice", "--name", "Dan", "--consent", "yes", "--mic"),
         ("enroll-voice", "--name", "Dan", "--consent", "yes", "a.wav"),
         ("identify-voice", "--diarize", "--speakers", "2", "a.wav"),
+        ("identify-voice", "--mic", "--seconds", "10"),
+        ("forget-voice", "Dan"),
         ("voice-compare", "a.wav", "b.wav"),
         ("voice-eval", "recordings/"),
     ):

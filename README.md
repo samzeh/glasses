@@ -125,6 +125,7 @@ glasses voice-check            # fetch the voice models, ~36 MB
 glasses enroll-voice --name "Sam" --consent "myself" --wearer --mic
 
 glasses enroll-voice --name "Dan" --consent "asked him" --mic --seconds 30
+glasses identify-voice --mic              # listen for 10s and say who it heard
 glasses identify-voice conversation.wav --diarize --speakers 2
 ```
 
@@ -171,7 +172,9 @@ That is not a calibration. `voice-eval` does it properly on your voices.
 | `glasses voice-check` | fetch the voice models, report the wearer |
 | `glasses enroll-voice --name N --consent "…" --mic` | record a voice now (`--wearer` for yourself) |
 | `glasses enroll-voice --name N --consent "…" audio/` | same, from audio files |
-| `glasses identify-voice audio/` | who is speaking (`--diarize` for several voices) |
+| `glasses identify-voice --mic` | listen now and say who it heard |
+| `glasses identify-voice audio/` | same, from files (`--diarize` for several voices) |
+| `glasses forget-voice "Sam"` | drop a bad voice enrollment, keep the face one |
 | `glasses voice-compare a.wav b.wav` | pairwise similarity between recordings |
 | `glasses voice-eval recordings/` | calibrate `accept_threshold` on your own voices |
 

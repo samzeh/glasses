@@ -216,12 +216,26 @@ def cmd_identify_voice(args: argparse.Namespace) -> int:
     if store.template_count_by_kind(VOICE) == 0:
         print("No voiceprints enrolled — run enroll-voice first.", file=sys.stderr)
         return 1
+    if bool(args.mic) == bool(args.audio):
+        print("Give either --mic or audio paths, not both and not neither.", file=sys.stderr)
+        return 1
 
     pipeline = build_voice_pipeline(store, diarize=args.diarize, num_speakers=args.speakers)
-    for path in expand_audio(args.audio):
-        samples = load_audio(path)
+
+    if args.mic:
+        from .voice.capture import record_with_meter
+
+        print(f"Listening for {args.seconds}s. Talk, or let someone else talk.\n")
+        samples = record_with_meter(args.seconds, device=args.device)
+        if args.save:
+            write_wav(args.save, samples)
+        recordings = [("microphone", samples)]
+    else:
+        recordings = [(p.name, load_audio(p)) for p in expand_audio(args.audio)]
+
+    for label, samples in recordings:
         result = pipeline.process(samples)
-        print(f"{path.name}  ({result.audio_duration_s:.0f}s)")
+        print(f"{label}  ({result.audio_duration_s:.0f}s)")
         if not result.segments:
             print("  no speech")
             continue
@@ -373,7 +387,11 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     identify = subparsers.add_parser("identify-voice", help="who is speaking in a recording")
     identify.add_argument("--diarize", action="store_true", help="split by speaker first")
     identify.add_argument("--speakers", type=int, default=-1, help="pin the speaker count")
-    identify.add_argument("audio", nargs="+")
+    identify.add_argument("--mic", action="store_true", help="listen on the microphone now")
+    identify.add_argument("--seconds", type=int, default=10, help="how long to listen")
+    identify.add_argument("--device", type=int, default=None, help="input device index")
+    identify.add_argument("--save", help="also write what it heard to this WAV")
+    identify.add_argument("audio", nargs="*")
     identify.set_defaults(func=cmd_identify_voice)
 
     forget_voice = subparsers.add_parser(
