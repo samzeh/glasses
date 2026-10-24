@@ -210,6 +210,34 @@ glasses search-seed                   # four synthetic encounters to ask about
 glasses ask "who have I met who works in biotech"
 ```
 
+### From a real conversation, not the seed
+
+`search-seed` is synthetic, and the agent will say so when asked. To ask
+about something that actually happened, `remember` runs the whole cold loop
+in one command — identify the speakers, transcribe each segment, extract the
+durable facts with Gemini, index both halves:
+
+```sh
+export GEMINI_API_KEY='…'             # aistudio.google.com/apikey
+
+glasses remember conversation.wav --location "Cal Hacks"
+glasses remember --mic --seconds 120 --diarize --speakers 2
+glasses remember conversation.wav --dry-run   # see the facts, index nothing
+```
+
+`remember` and `ask` are the two ends of the same thing: one puts a
+conversation somewhere, the other gets it back.
+
+Three rules decide what becomes a fact, and all three come from the PRD.
+Every fact keeps the sentence it came from, because a profile that asserts
+something wrong is only correctable if you can see what caused it. A fact is
+attached to a person **here, in code**, by mapping the speaker label back to
+the identity the gallery resolved — the model never sees a `person_id`, and
+where the subject is ambiguous the fact belongs to the encounter rather than
+to a guess. And the confidence floor is deliberately high: far-field audio in
+a noisy room garbles transcripts, and a confidently wrong fact surfaced at the
+wrong moment is worse than an empty profile.
+
 The shape of the answer — the agent writes the prose, so the wording will
 differ:
 
@@ -363,6 +391,7 @@ from a file in this repo.
 | `glasses forget-voice "Sam"` | drop a bad voice enrollment, keep the face one |
 | `glasses voice-compare a.wav b.wav` | pairwise similarity between recordings |
 | `glasses transcribe audio/` | who said what, attributed, via Cartesia (`--mic` to listen now) |
+| `glasses remember audio/` | transcribe, extract facts with Gemini, index both (`--dry-run` to look first) |
 | `glasses transcribe audio/ --local` | the same, on local Whisper — no key, no network |
 | `glasses voice-eval recordings/` | calibrate `accept_threshold` on your own voices |
 | `glasses ask "who did I meet at Cal Hacks"` | ask the Agent Builder agent about people you have met |
