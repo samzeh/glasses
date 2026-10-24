@@ -33,6 +33,7 @@ from __future__ import annotations
 import functools
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable, Sequence
@@ -43,7 +44,9 @@ from .voice.transcribe import Utterance
 
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 
-DEFAULT_MODEL = "gemini-3.8-flash"
+
+DEFAULT_MODEL = "gemini-3.5-flash"
+FALLBACK_MODELS = ("gemini-3.7-flash", "gemini-3.8-flash", "gemini-flash-latest")
 
 KEY_HINT = (
     "Set GEMINI_API_KEY (a .env beside the repo is read at startup). "
@@ -229,8 +232,11 @@ class GeminiExtractor:
         key: str | None = None,
         *,
         model: str = DEFAULT_MODEL,
+        fallback_models: Sequence[str] = FALLBACK_MODELS,
         min_confidence: float = MIN_CONFIDENCE,
         timeout_s: float = 60.0,
+        attempts: int = 2,
+        retry_wait_s: float = 1.0,
         post: Post | None = None,
     ) -> None:
         resolved = api_key(key)
@@ -238,12 +244,20 @@ class GeminiExtractor:
             raise GeminiError(f"no Gemini API key. {KEY_HINT}")
         self._key = resolved
         self.model = model
+        # The chain, preferred first, with the caller's model promoted to
+        # the front and no duplicates. See _send for why there is one.
+        self.models = [model] + [m for m in fallback_models if m != model]
         self.min_confidence = min_confidence
+        self._attempts = max(1, attempts)
+        self._retry_wait_s = retry_wait_s
         self._post: Post = post or functools.partial(_post, timeout_s=timeout_s)
+        #: Which model actually answered. Not the one that was asked for,
+        #: whenever the chain had to move on.
+        self.served_by: str | None = None
 
     @property
     def model_name(self) -> str:
-        return f"gemini/{self.model}"
+        return f"gemini/{self.served_by or self.model}"
 
     def extract(
         self,
@@ -278,12 +292,43 @@ class GeminiExtractor:
                 "temperature": 0.0,
             },
         }
-        raw = self._post(
-            f"{ENDPOINT}/{self.model}:generateContent",
-            {"Content-Type": "application/json", "x-goog-api-key": self._key},
-            json.dumps(payload).encode("utf-8"),
-        )
+        raw = self._send(json.dumps(payload).encode("utf-8"))
         return self._parse(raw, utterances, encounter_id, wearer_name, occurred_at)
+
+    def _send(self, body: bytes) -> bytes:
+        """One request, retried, then tried against the next model.
+
+        Google's flash models return 503 "experiencing high demand" in
+        bursts that roll between models: the newest can be refusing while
+        an older one answers in seven seconds, and a minute later it is the
+        other way round. A single model plus a retry loop therefore still
+        fails, because the thing that is down is the model and not the
+        account. Walking the chain is what actually gets a transcript
+        turned into facts during a demo.
+
+        Only retryable failures move on. A refused key is refused
+        everywhere, and trying it four more times just delays the message
+        that says so.
+        """
+        last: GeminiError | None = None
+        for model in self.models:
+            for attempt in range(self._attempts):
+                try:
+                    raw = self._post(
+                        f"{ENDPOINT}/{model}:generateContent",
+                        {"Content-Type": "application/json", "x-goog-api-key": self._key},
+                        body,
+                    )
+                except GeminiError as error:
+                    if not error.retryable:
+                        raise
+                    last = error
+                    if attempt < self._attempts - 1:
+                        time.sleep(self._retry_wait_s * (attempt + 1))
+                    continue
+                self.served_by = model
+                return raw
+        raise last or GeminiError("no Gemini model answered", retryable=True)
 
     def _parse(
         self,

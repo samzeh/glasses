@@ -279,3 +279,82 @@ def test_a_socket_error_becomes_a_retryable_gemini_error(monkeypatch):
     with pytest.raises(F.GeminiError, match="could not reach") as caught:
         F._post("https://example.invalid", {}, b"{}")
     assert caught.value.retryable
+
+
+# --- retry and model fallback --------------------------------------------
+
+
+def _busy(model_or_none=None):
+    """A 503 the way Google sends it when a flash model is saturated."""
+    return F.GeminiError("Gemini returned HTTP 503.", retryable=True)
+
+
+def test_a_retryable_failure_moves_to_the_next_model(monkeypatch):
+    """503s roll between flash models: the newest can refuse while an
+    older one answers, so the chain is what gets a transcript extracted."""
+    monkeypatch.setattr(F.time, "sleep", lambda _s: None)
+    tried = []
+
+    def post(url, headers, body):
+        model = url.rsplit("/", 1)[-1].split(":")[0]
+        tried.append(model)
+        if model == F.DEFAULT_MODEL:
+            raise _busy()
+        return reply([GOOD])
+
+    extractor = F.GeminiExtractor("k", post=post, attempts=2)
+    [fact] = extractor.extract(CONVERSATION, encounter_id="e1")
+    assert fact.value == "Helix Bio"
+    # Both attempts on the default, then the first fallback answered.
+    assert tried[:2] == [F.DEFAULT_MODEL, F.DEFAULT_MODEL]
+    assert tried[2] == F.FALLBACK_MODELS[0]
+
+
+def test_the_model_that_answered_is_reported(monkeypatch):
+    """The printed recogniser has to be the one that ran, not the one asked
+    for, or the demo claims a model it never reached."""
+    monkeypatch.setattr(F.time, "sleep", lambda _s: None)
+
+    def post(url, headers, body):
+        if F.DEFAULT_MODEL in url:
+            raise _busy()
+        return reply([GOOD])
+
+    extractor = F.GeminiExtractor("k", post=post, attempts=1)
+    extractor.extract(CONVERSATION, encounter_id="e1")
+    assert extractor.served_by == F.FALLBACK_MODELS[0]
+    assert extractor.model_name == f"gemini/{F.FALLBACK_MODELS[0]}"
+
+
+def test_a_refused_key_is_not_retried_anywhere(monkeypatch):
+    """A key refused by one model is refused by all of them. Walking the
+    chain would just delay the message saying so."""
+    monkeypatch.setattr(F.time, "sleep", lambda _s: None)
+    calls = []
+
+    def post(url, headers, body):
+        calls.append(url)
+        raise F.GeminiError("Gemini rejected the API key (HTTP 401).", retryable=False)
+
+    with pytest.raises(F.GeminiError, match="rejected the API key"):
+        F.GeminiExtractor("k", post=post).extract(CONVERSATION, encounter_id="e1")
+    assert len(calls) == 1
+
+
+def test_every_model_busy_raises_the_last_failure(monkeypatch):
+    monkeypatch.setattr(F.time, "sleep", lambda _s: None)
+
+    def post(url, headers, body):
+        raise _busy()
+
+    extractor = F.GeminiExtractor("k", post=post, attempts=1)
+    with pytest.raises(F.GeminiError, match="503") as caught:
+        extractor.extract(CONVERSATION, encounter_id="e1")
+    assert caught.value.retryable
+    assert extractor.served_by is None
+
+
+def test_the_requested_model_is_tried_first_and_once(monkeypatch):
+    extractor = F.GeminiExtractor("k", model="gemini-3.8-flash", post=lambda *_: reply([]))
+    assert extractor.models[0] == "gemini-3.8-flash"
+    assert extractor.models.count("gemini-3.8-flash") == 1
