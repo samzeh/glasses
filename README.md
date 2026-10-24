@@ -39,8 +39,10 @@ people skip: **nothing can be recognised until it has been shown.**
 2. **Identify** — show it a face and ask who that is. It compares against
    everyone enrolled and answers with a name, "possibly a name", or unknown.
 
-Everything is local. There is nothing to upload and no account: the models run
-on your machine and the gallery is a directory you can delete.
+Recognition is local. There is nothing to upload and no account: the models
+run on your machine and the gallery is a directory you can delete. The one
+exception is transcription, which is a hosted call by default — see
+[Voice](#voice-who-is-speaking), and `--local` if that is not what you want.
 
 ### Step 1 — enroll yourself, from the webcam
 
@@ -116,16 +118,32 @@ Normal, and worth reading rather than fighting. Check in this order:
 The second identity channel, plus transcription on top of it. Speech-to-text
 alone cannot do this: an STT API transcribes sound, it does not track people
 across recordings. Identity comes from the gallery; the words come from
-Whisper, running locally.
+**Cartesia `ink-whisper`** when `CARTESIA_API_KEY` is set, and from Whisper
+running locally when it is not.
 
-Each speaker segment is transcribed **on its own** rather than transcribing
-the whole file and aligning word timestamps against speaker turns. The
-segment already carries an identity, so its text inherits it — there is no
-alignment step and therefore no bug where a sentence lands on the wrong
-person because two clocks disagreed by 200 ms.
+Each speaker segment is transcribed **on its own** — one request per segment
+— rather than transcribing the whole file and aligning word timestamps
+against speaker turns. The segment already carries an identity, so its text
+inherits it; there is no alignment step and therefore no bug where a sentence
+lands on the wrong person because two clocks disagreed by 200 ms. Cartesia
+returns word timings and they are deliberately ignored: the segment's own
+start and end are the timing.
+
+The local recogniser stays wired up rather than becoming dead code. A key
+expires, or a conference network refuses to resolve anything, and either way
+a slightly worse transcript beats no transcript — so a failed call falls back
+to local Whisper mid-run and says so.
+
+Nothing extra to install: the `cartesia` extra resolves to the same voice
+stack, because the API call is one multipart POST and `urllib` already does
+that. Segmentation and speaker embedding still run locally — Cartesia
+replaces Whisper, not the pipeline.
 
 ```sh
-glasses voice-check            # fetch the voice models, ~36 MB
+glasses voice-check            # fetch the voice models, ~36 MB, and say
+                               # which recogniser a transcript would use
+
+export CARTESIA_API_KEY=sk_car_…   # Cartesia transcribes; unset means local
 
 # record yourself for 20 seconds — no audio files needed
 glasses enroll-voice --name "Sam" --consent "myself" --wearer --mic
@@ -133,6 +151,7 @@ glasses enroll-voice --name "Sam" --consent "myself" --wearer --mic
 glasses enroll-voice --name "Dan" --consent "asked him" --mic --seconds 30
 glasses identify-voice --mic              # listen for 10s and say who it heard
 glasses transcribe conversation.wav       # who said what, attributed
+glasses transcribe conversation.wav --local   # keep it all on this machine
 glasses identify-voice conversation.wav --diarize --speakers 2
 ```
 
@@ -176,14 +195,15 @@ That is not a calibration. `voice-eval` does it properly on your voices.
 | `glasses forget "Sam"` | delete a person and all their data, in one operation |
 | `glasses calibrate-pose frames/` | measure `nose_frontal_fraction` for your camera |
 | `glasses bench frames/` | per-stage latency against the budget |
-| `glasses voice-check` | fetch the voice models, report the wearer |
+| `glasses voice-check` | fetch the voice models, report the wearer and the recogniser |
 | `glasses enroll-voice --name N --consent "…" --mic` | record a voice now (`--wearer` for yourself) |
 | `glasses enroll-voice --name N --consent "…" audio/` | same, from audio files |
 | `glasses identify-voice --mic` | listen now and say who it heard |
 | `glasses identify-voice audio/` | same, from files (`--diarize` for several voices) |
 | `glasses forget-voice "Sam"` | drop a bad voice enrollment, keep the face one |
 | `glasses voice-compare a.wav b.wav` | pairwise similarity between recordings |
-| `glasses transcribe audio/` | who said what, attributed (`--mic` to listen now) |
+| `glasses transcribe audio/` | who said what, attributed, via Cartesia (`--mic` to listen now) |
+| `glasses transcribe audio/ --local` | the same, on local Whisper — no key, no network |
 | `glasses voice-eval recordings/` | calibrate `accept_threshold` on your own voices |
 
 `--store DIR` moves the gallery, `--help` works on any subcommand.
@@ -240,6 +260,8 @@ src/glasses/
     embed.py       WeSpeaker CAM++, 512-d
     models.py      model downloads; no HF token, no torch
     pipeline.py    segment -> merge -> gate -> embed -> wearer -> match
+    transcribe.py  one Transcriber Protocol, per speaker segment
+    cartesia.py    Cartesia ink-whisper: the default, one POST per segment
   encounter/
     clock.py       one monotonic microsecond clock, shared by both sensors
     types.py       Interval, FaceObservation, SpeechObservation, Encounter
@@ -350,6 +372,11 @@ will not notice without the chart.
   on a name.
 - `DiarizingSegmenter` runs and is wired up, but has not been checked against
   a recording with known speaker turns — only the single-speaker path has.
+- The Cartesia call has not been made for real here: there is no API key in
+  this environment. The request is built against the published API shape and
+  covered by tests with the HTTP layer mocked, so the first run with a live
+  key is the first live run. The local path is what has been exercised on
+  real recordings.
 - ReDimNet is the voice equivalent of the AdaFace swap: least cross-domain
   degradation of the current crop, which is what far-field audio needs.
 - `PgVectorGallery` is written but untested — it needs a Postgres with
@@ -364,3 +391,9 @@ and a soft-delete column on every table holding biometric data, because the
 PRD puts the consent and deletion paths in M0 rather than retrofitting them.
 The deletion job that enforces retention is not written yet. Until it is, do
 not capture anyone.
+
+One thing leaves the machine, and it is worth knowing which: with
+`CARTESIA_API_KEY` set, each speech segment that passed the quality gate is
+uploaded to Cartesia for transcription. Nothing else is — not frames, not
+embeddings, not the gallery. `glasses transcribe --local`, or no key, keeps
+even that offline.
