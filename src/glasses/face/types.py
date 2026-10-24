@@ -183,6 +183,13 @@ class FaceResult:
 class FrameResult:
     faces: tuple[FaceResult, ...]
     timings: StageTimings
+    #: Device-clock microseconds at which the frame was *captured*, not at
+    #: which it was processed. Those differ by a variable amount, and the
+    #: binding depends on knowing when the shutter opened — a face matched
+    #: 300 ms late would be lined up against the wrong sentence.
+    #: None when the caller did not stamp it, which is fine for one-shot
+    #: recognition and useless for an encounter.
+    captured_at_us: int | None = None
 
     @property
     def primary(self) -> FaceResult | None:

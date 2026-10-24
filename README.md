@@ -240,6 +240,10 @@ src/glasses/
     embed.py       WeSpeaker CAM++, 512-d
     models.py      model downloads; no HF token, no torch
     pipeline.py    segment -> merge -> gate -> embed -> wearer -> match
+  encounter/
+    clock.py       one monotonic microsecond clock, shared by both sensors
+    types.py       Interval, FaceObservation, SpeechObservation, Encounter
+    session.py     the dwell + partner-speech trigger state machine
   identity/        shared by both channels: Embedding, gallery, matcher
   store.py       file-backed people + templates, for M0
   cli.py         glasses check / enroll / identify / watch / bench

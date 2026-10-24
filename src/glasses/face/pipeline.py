@@ -41,7 +41,13 @@ class FacePipeline:
         self.gallery = gallery
         self.config = config or PipelineConfig()
 
-    def process_frame(self, frame: np.ndarray) -> FrameResult:
+    def process_frame(
+        self,
+        frame: np.ndarray,
+        captured_at_us: int | None = None,
+    ) -> FrameResult:
+        """``captured_at_us`` is stamped by the caller at capture time, since
+        only the caller knows when the shutter opened."""
         cfg = self.config
         clock = _Clock()
 
@@ -49,7 +55,7 @@ class FacePipeline:
             detections = self.detector.detect(frame)
 
         if not detections:
-            return FrameResult(faces=(), timings=clock.timings())
+            return FrameResult(faces=(), timings=clock.timings(), captured_at_us=captured_at_us)
 
         primary_index = select_primary(detections, frame.shape, cfg.detect)
 
@@ -81,7 +87,7 @@ class FacePipeline:
             )
             for i in range(len(detections))
         )
-        return FrameResult(faces=faces, timings=clock.timings())
+        return FrameResult(faces=faces, timings=clock.timings(), captured_at_us=captured_at_us)
 
     def best_frame(self, frames: list[np.ndarray]) -> tuple[int, FrameResult] | None:
         """Pick the best result from a capture burst.

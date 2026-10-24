@@ -175,3 +175,34 @@ def test_a_looser_gate_lets_more_through():
     result = pipeline.process_frame(flat)
 
     assert result.faces[0].quality.passed
+
+
+# --- the shared clock -----------------------------------------------------
+
+
+def test_a_frame_carries_when_it_was_captured():
+    """Stamped by the caller at capture, not derived at processing: the two
+    differ by a variable amount, and the binding lines a face up against a
+    sentence by time."""
+    pipeline = build([make_detection()])
+
+    result = pipeline.process_frame(make_textured_frame(), captured_at_us=1_234_567)
+
+    assert result.captured_at_us == 1_234_567
+
+
+def test_an_unstamped_frame_says_so_rather_than_inventing_a_time():
+    """Fine for one-shot recognition, useless for an encounter — so it has
+    to be distinguishable, not quietly filled in with 'now'."""
+    result = build([make_detection()]).process_frame(make_textured_frame())
+
+    assert result.captured_at_us is None
+
+
+def test_an_empty_frame_still_carries_its_timestamp():
+    """A frame with no face is evidence of absence at a moment, which the
+    close timeout depends on."""
+    result = build([]).process_frame(make_textured_frame(), captured_at_us=999)
+
+    assert result.faces == ()
+    assert result.captured_at_us == 999
