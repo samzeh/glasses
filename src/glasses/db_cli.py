@@ -141,22 +141,21 @@ def cmd_db_stats(args: argparse.Namespace) -> int:
         print(f"  face_observation    {face_obs} rows")
         print(f"  speech_observation  {speech_obs} rows")
 
-        cursor.execute(
-            """
-            SELECT hypertable_name,
-                   pg_size_pretty(before_compression_total_bytes),
-                   pg_size_pretty(after_compression_total_bytes),
-                   number_of_chunks
-            FROM hypertable_compression_stats('face_observation')
-            UNION ALL
-            SELECT hypertable_name,
-                   pg_size_pretty(before_compression_total_bytes),
-                   pg_size_pretty(after_compression_total_bytes),
-                   number_of_chunks
-            FROM hypertable_compression_stats('speech_observation')
-            """
-        )
-        rows = cursor.fetchall()
+        # The stats function reports the hypertable it was asked about only
+        # as the argument, so the name is carried alongside.
+        rows = []
+        for table in ("face_observation", "speech_observation"):
+            cursor.execute(
+                """
+                SELECT %s,
+                       pg_size_pretty(before_compression_total_bytes),
+                       pg_size_pretty(after_compression_total_bytes),
+                       number_compressed_chunks
+                FROM hypertable_compression_stats(%s)
+                """,
+                (table, table),
+            )
+            rows.extend(cursor.fetchall())
         print("\ncompression")
         if not any(row[3] for row in rows):
             print("  no compressed chunks yet — nothing is 7 days old. Force it with:")
@@ -187,9 +186,16 @@ def cmd_db_stats(args: argparse.Namespace) -> int:
                 f"{'wearer s':>9s}"
             )
         for bucket, encounter, obs, distinct, seen, segments, voices_, partner, wearer in minutes:
+            # Both values are sliced before the f-string: a slice inside a
+            # replacement field is read as the start of the format spec.
+            when = bucket.strftime("%Y-%m-%d %H:%M")
+            short = encounter[:8]
+            # The sums come back as Decimal, which has no integer
+            # presentation, so the widths are applied to plain ints.
             print(
-                f"  {bucket:%Y-%m-%d %H:%M}  {encounter[:8]:10s} {obs:6d} {distinct:9d} "
-                f"{seen:7} {segments:7d} {voices_:7d} {partner:10} {wearer:9}"
+                f"  {when:17s} {short:10s} {int(obs):6d} {int(distinct):9d} "
+                f"{float(seen):7.1f} {int(segments):7d} {int(voices_):7d} "
+                f"{float(partner):10.1f} {float(wearer):9.1f}"
             )
     return 0
 
