@@ -58,11 +58,14 @@ class Enrolled:
     speaker_label: str
     templates: int
     confidence: float
+    #: Which gallery the templates landed in: "face" or "voice".
+    kind: str = "voice"
 
     def __str__(self) -> str:
+        word = "faceprint" if self.kind == "face" else "voiceprint"
         return (
             f"{self.display_name} (was {self.speaker_label}) — "
-            f"{self.templates} voiceprint(s), name heard at {self.confidence:.2f}"
+            f"{self.templates} {word}(s), name heard at {self.confidence:.2f}"
         )
 
 
@@ -137,8 +140,17 @@ def enroll_from_conversation(
     utterances: Sequence[Utterance] = (),
     min_confidence: float = MIN_NAME_CONFIDENCE,
     source: str = "",
+    embeddings: dict[str, list[Any]] | None = None,
+    kind: str = "voice",
 ) -> tuple[list[Enrolled], list[PersonFact]]:
     """Create people from introductions, and re-attribute their facts.
+
+    ``embeddings`` overrides where the templates come from, keyed by the
+    same speaker label the facts carry. The camera path passes face
+    embeddings here, which matters: voice alone cannot reliably separate
+    two people, so enrolling a stranger on their voiceprint creates
+    someone the next encounter will not recognise. ``kind`` says which
+    gallery they land in.
 
     Returns what was enrolled and the facts with ``person_id`` filled in
     for them. The facts are rebuilt rather than mutated because
@@ -150,14 +162,14 @@ def enroll_from_conversation(
     if not offered:
         return [], list(facts)
 
-    voices = embeddings_by_speaker(results, labels)
+    voices = embeddings if embeddings is not None else embeddings_by_speaker(results, labels)
     enrolled: list[Enrolled] = []
     assigned: dict[str, tuple[str, str]] = {}
 
     for label, (name, confidence) in offered.items():
-        embeddings = voices.get(label)
-        if not embeddings:
-            # Heard a name but kept no usable voiceprint for them. Enrolling
+        templates = voices.get(label)
+        if not templates:
+            # Heard a name but kept no usable template for them. Enrolling
             # now would make a person the next encounter cannot recognise.
             continue
         if store.find_by_name(name) is not None:
@@ -166,10 +178,10 @@ def enroll_from_conversation(
 
         person_id = store.enroll(
             name,
-            list(embeddings),
+            list(templates),
             consent_note=f"introduced themselves during {source or 'a recorded conversation'}",
             source=source,
-            kind="voice",
+            kind=kind,
         )
         assigned[label] = (person_id, name)
         enrolled.append(
@@ -177,8 +189,9 @@ def enroll_from_conversation(
                 person_id=person_id,
                 display_name=name,
                 speaker_label=label,
-                templates=len(embeddings),
+                templates=len(templates),
                 confidence=confidence,
+                kind=kind,
             )
         )
 

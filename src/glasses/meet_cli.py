@@ -6,6 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from .autoenroll import MIN_NAME_CONFIDENCE
 from .binding.asd import AsdConfig
 from .encounter.clock import Clock, seconds_to_us, us_to_seconds
 from .face import FacePipeline
@@ -221,6 +222,132 @@ def _resolve(args, store, voice_pipeline, face_pipeline, tracker, audio, audio_s
 
     print(f"\n{assigned}/{len(partners)} partner utterance(s) matched to a face")
     print(f"crops in {out_dir}/ — open them and check it picked the right person")
+
+    if getattr(args, "remember", False):
+        return _remember(args, store, face_pipeline, captures, audio_start_us)
+    return 0
+
+
+def _remember(args, store, face_pipeline, captures, audio_start_us) -> int:  # type: ignore[no-untyped-def]
+    """Take the bound captures the rest of the way: words, facts, index.
+
+    Identity here is the face's, not the voice's. That is the whole reason
+    this path exists beside ``glasses remember`` — see ``recall``'s module
+    docstring for the measurement behind it.
+    """
+    import uuid
+    from datetime import UTC, datetime
+
+    from .autoenroll import enroll_from_conversation, relabel_utterances
+    from .facts import DEFAULT_MODEL, GeminiError, GeminiExtractor, has_api_key
+    from .recall import face_templates_by_label, label_captures, utterances_from_captures
+    from .search.documents import segments_from_utterances
+    from .voice import WhisperTranscriber, build_transcriber
+
+    if not has_api_key():
+        print(
+            "\nNo Gemini API key, so there are no facts to extract."
+            "\nSet GEMINI_API_KEY (a .env beside the repo is read at startup).",
+            file=sys.stderr,
+        )
+        return 2
+
+    encounter_id = args.encounter or f"enc-{uuid.uuid4().hex[:12]}"
+    occurred_at = datetime.now(UTC).isoformat()
+    wearer = store.wearer()
+    wearer_name = wearer.display_name if wearer else "the wearer"
+
+    print("\nidentifying faces …")
+    identities = label_captures(captures, face_pipeline, store)
+    for track_id, identity in sorted(identities.items()):
+        who = identity.name or identity.note or "not recognised"
+        extra = f" ({identity.similarity:.2f})" if identity.known else ""
+        print(f"  face #{track_id}: {who}{extra}")
+
+    transcriber = build_transcriber(language=args.language, local_only=args.local)
+    print(f"\ntranscribing with {transcriber.model_name} …")
+    try:
+        utterances = utterances_from_captures(
+            captures, identities, transcriber, audio_start_us=audio_start_us
+        )
+    except Exception as error:  # noqa: BLE001 - a hosted failure must not lose the captures
+        print(f"  ! {error}\n  falling back to local Whisper", file=sys.stderr)
+        utterances = utterances_from_captures(
+            captures, identities, WhisperTranscriber(), audio_start_us=audio_start_us
+        )
+
+    if not utterances:
+        print("nothing intelligible to remember")
+        return 1
+
+    from .voice import render
+
+    print()
+    print(render(utterances))
+
+    extractor = GeminiExtractor(model=args.gemini_model or DEFAULT_MODEL)
+    try:
+        facts = extractor.extract(
+            utterances,
+            encounter_id=encounter_id,
+            wearer_name=wearer_name,
+            occurred_at=occurred_at,
+        )
+    except GeminiError as error:
+        print(f"\n  ! extraction failed: {error}", file=sys.stderr)
+        facts = []
+
+    if not args.no_enroll:
+        enrolled, facts = enroll_from_conversation(
+            store,
+            facts,
+            [],
+            [],
+            min_confidence=args.name_confidence,
+            source=f"meet ({encounter_id})",
+            # Faces, not voiceprints: the camera is why this path exists.
+            embeddings=face_templates_by_label(captures, identities),
+            kind="face",
+        )
+        if enrolled:
+            utterances = relabel_utterances(utterances, enrolled)
+            print(f"\n  enrolled {len(enrolled)} new person/people from this conversation:")
+            for item in enrolled:
+                print(f"    {item}")
+
+    print(f"\n  {len(facts)} fact(s):")
+    for fact in facts:
+        who = fact.person_name or "unattributed"
+        print(f"    {who:<16} {fact.kind:<12} {fact.value}  ({fact.confidence:.2f})")
+        if fact.evidence_span:
+            print(f'      "{fact.evidence_span}"')
+
+    if args.dry_run:
+        print("\n--dry-run: nothing indexed")
+        return 0
+
+    from .search.config import ConfigError, ElasticConfig
+    from .search_cli import _indexer
+
+    try:
+        config = ElasticConfig.from_env()
+    except ConfigError as error:
+        print(f"\n  ! not indexed: {error}", file=sys.stderr)
+        return 1
+
+    indexer = _indexer(config)
+    indexer.ensure_indices()
+    segments = segments_from_utterances(
+        utterances,
+        encounter_id=encounter_id,
+        occurred_at=occurred_at,
+        location=args.location,
+        model=transcriber.model_name,
+        name_of=store.name_of,
+    )
+    print(f"\nindexed  {indexer.index_segments(segments)}")
+    print(f"indexed  {indexer.index_facts(facts)}")
+    print('\nNow ask: glasses ask "who did I just meet"')
     return 0
 
 
@@ -264,6 +391,26 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
         default=0.15,
         help="how far the winner must beat the runner-up (default 0.15)",
     )
+    meet.add_argument(
+        "--remember",
+        action="store_true",
+        help="transcribe, extract facts with Gemini, and index the encounter",
+    )
+    meet.add_argument("--encounter", default=None, help="encounter id (default: a new one)")
+    meet.add_argument("--location", default=None, help="where this happened")
+    meet.add_argument("--language", default="en", help="spoken language")
+    meet.add_argument("--local", action="store_true", help="keep transcription on this machine")
+    meet.add_argument("--gemini-model", default=None, help="Gemini model for extraction")
+    meet.add_argument(
+        "--no-enroll", action="store_true", help="do not create people from introductions"
+    )
+    meet.add_argument(
+        "--name-confidence",
+        type=float,
+        default=MIN_NAME_CONFIDENCE,
+        help=f"how sure a heard name must be to enrol someone (default {MIN_NAME_CONFIDENCE})",
+    )
+    meet.add_argument("--dry-run", action="store_true", help="extract but index nothing")
     meet.add_argument("--save-audio", action="store_true")
     meet.add_argument("--headless", action="store_true")
     meet.set_defaults(func=cmd_meet)
