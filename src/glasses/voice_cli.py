@@ -246,6 +246,49 @@ def cmd_identify_voice(args: argparse.Namespace) -> int:
     return 0
 
 
+def _label_of(item, store: LocalStore):  # type: ignore[no-untyped-def]
+    person_id = item.match.person_id if item.match else None
+    name = store.name_of(person_id) if person_id else None
+    return (person_id, name, item.is_wearer)
+
+
+def cmd_transcribe(args: argparse.Namespace) -> int:
+    """Who said what. Each speaker segment is transcribed on its own, so the
+    attribution needs no timestamp alignment to be exact."""
+    from .voice import WhisperTranscriber, render, transcribe_segments
+
+    store = LocalStore.load(args.store)
+    pipeline = build_voice_pipeline(store, diarize=args.diarize, num_speakers=args.speakers)
+    transcriber = WhisperTranscriber(args.model)
+
+    if args.mic:
+        from .voice.capture import record_with_meter
+
+        print(f"Listening for {args.seconds}s.\n")
+        samples = record_with_meter(args.seconds, device=args.device)
+        if args.save:
+            write_wav(args.save, samples)
+        recordings = [("microphone", samples)]
+    else:
+        recordings = [(p.name, load_audio(p)) for p in expand_audio(args.audio)]
+
+    for label, samples in recordings:
+        result = pipeline.process(samples)
+        usable = [i for i in result.segments if i.embedding is not None]
+        utterances = transcribe_segments(
+            transcriber,
+            [i.segment for i in usable],
+            labels=[_label_of(i, store) for i in usable],
+        )
+        print(f"--- {label} ---")
+        print(render(utterances) if utterances else "  (nothing intelligible)")
+        unknown = sum(1 for u in utterances if u.person_id is None and not u.is_wearer)
+        if unknown:
+            print(f"\n  {unknown} utterance(s) from someone not enrolled")
+        print()
+    return 0
+
+
 def cmd_voice_eval(args: argparse.Namespace) -> int:
     """Calibrate the accept threshold on your own voices.
 
@@ -393,6 +436,17 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     identify.add_argument("--save", help="also write what it heard to this WAV")
     identify.add_argument("audio", nargs="*")
     identify.set_defaults(func=cmd_identify_voice)
+
+    transcribe = subparsers.add_parser("transcribe", help="who said what, attributed")
+    transcribe.add_argument("--diarize", action="store_true", help="split by speaker first")
+    transcribe.add_argument("--speakers", type=int, default=-1, help="pin the speaker count")
+    transcribe.add_argument("--model", default="base.en", help="whisper size (default base.en)")
+    transcribe.add_argument("--mic", action="store_true", help="listen on the microphone now")
+    transcribe.add_argument("--seconds", type=int, default=20, help="how long to listen")
+    transcribe.add_argument("--device", type=int, default=None, help="input device index")
+    transcribe.add_argument("--save", help="also write what it heard to this WAV")
+    transcribe.add_argument("audio", nargs="*")
+    transcribe.set_defaults(func=cmd_transcribe)
 
     forget_voice = subparsers.add_parser(
         "forget-voice", help="remove a person's voiceprints, keeping their face"

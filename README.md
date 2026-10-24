@@ -113,10 +113,16 @@ Normal, and worth reading rather than fighting. Check in this order:
 
 ## Voice: who is speaking
 
-The second identity channel. Transcription is deliberately **not** here —
-this answers "which enrolled person is this voice", which no speech-to-text
-API does. They transcribe sound; they do not track people across recordings.
-Pair it with whatever STT you like.
+The second identity channel, plus transcription on top of it. Speech-to-text
+alone cannot do this: an STT API transcribes sound, it does not track people
+across recordings. Identity comes from the gallery; the words come from
+Whisper, running locally.
+
+Each speaker segment is transcribed **on its own** rather than transcribing
+the whole file and aligning word timestamps against speaker turns. The
+segment already carries an identity, so its text inherits it — there is no
+alignment step and therefore no bug where a sentence lands on the wrong
+person because two clocks disagreed by 200 ms.
 
 ```sh
 glasses voice-check            # fetch the voice models, ~36 MB
@@ -126,6 +132,7 @@ glasses enroll-voice --name "Sam" --consent "myself" --wearer --mic
 
 glasses enroll-voice --name "Dan" --consent "asked him" --mic --seconds 30
 glasses identify-voice --mic              # listen for 10s and say who it heard
+glasses transcribe conversation.wav       # who said what, attributed
 glasses identify-voice conversation.wav --diarize --speakers 2
 ```
 
@@ -176,6 +183,7 @@ That is not a calibration. `voice-eval` does it properly on your voices.
 | `glasses identify-voice audio/` | same, from files (`--diarize` for several voices) |
 | `glasses forget-voice "Sam"` | drop a bad voice enrollment, keep the face one |
 | `glasses voice-compare a.wav b.wav` | pairwise similarity between recordings |
+| `glasses transcribe audio/` | who said what, attributed (`--mic` to listen now) |
 | `glasses voice-eval recordings/` | calibrate `accept_threshold` on your own voices |
 
 `--store DIR` moves the gallery, `--help` works on any subcommand.

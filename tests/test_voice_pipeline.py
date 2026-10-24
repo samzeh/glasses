@@ -319,3 +319,79 @@ def test_a_missing_audio_stack_names_the_command_that_fixes_it(monkeypatch):
     message = str(caught.value)
     assert "uv pip install -e '.[face,voice]'" in message
     assert "uv sync" in message
+
+
+# --- transcription --------------------------------------------------------
+
+
+class FakeTranscriber:
+    model_name = "fake/whisper"
+
+    def __init__(self, texts: list[str]) -> None:
+        self._texts = list(texts)
+
+    def transcribe(self, samples) -> str:
+        return self._texts.pop(0) if self._texts else ""
+
+
+def test_each_segment_carries_who_said_it():
+    """Transcribing per segment means attribution needs no alignment: the
+    text inherits the identity the segment already has."""
+    from glasses.voice.transcribe import transcribe_segments
+
+    audio = recording(20.0)
+    segments = [
+        SpeechSegment(1.0, 7.0, audio[: 6 * SAMPLE_RATE], speaker=0),
+        SpeechSegment(8.0, 14.0, audio[: 6 * SAMPLE_RATE], speaker=1),
+    ]
+    transcriber = FakeTranscriber(["hello there", "I work at Figma"])
+
+    utterances = transcribe_segments(
+        transcriber, segments, labels=[(None, None, True), ("p1", "Vrinda", False)]
+    )
+
+    assert utterances[0].is_wearer
+    assert utterances[1].person_name == "Vrinda"
+    assert utterances[1].text == "I work at Figma"
+    assert utterances[1].start_s == 8.0
+
+
+def test_empty_transcripts_are_dropped():
+    """Whisper returns '' or a lone period on unintelligible audio, and an
+    empty utterance is not evidence of anything."""
+    from glasses.voice.transcribe import transcribe_segments
+
+    audio = recording(20.0)
+    segments = [SpeechSegment(1.0, 7.0, audio[: 6 * SAMPLE_RATE])] * 3
+
+    utterances = transcribe_segments(FakeTranscriber(["real words", "", " . "]), segments)
+
+    assert len(utterances) == 1
+
+
+def test_mismatched_labels_are_refused():
+    from glasses.voice.transcribe import transcribe_segments
+
+    audio = recording(20.0)
+    with pytest.raises(ValueError, match="labels"):
+        transcribe_segments(
+            FakeTranscriber([]),
+            [SpeechSegment(1.0, 7.0, audio[: 6 * SAMPLE_RATE])],
+            labels=[(None, None, False), (None, None, False)],
+        )
+
+
+def test_the_rendered_transcript_names_the_speakers():
+    from glasses.voice.transcribe import Utterance, render
+
+    text = render(
+        [
+            Utterance("hello", 1.0, 7.0, is_wearer=True),
+            Utterance("hi", 8.0, 14.0, person_name="Vrinda"),
+            Utterance("who am I", 15.0, 20.0, speaker=2),
+        ]
+    )
+
+    assert "you: hello" in text
+    assert "Vrinda: hi" in text
+    assert "speaker 2: who am I" in text

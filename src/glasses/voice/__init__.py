@@ -16,6 +16,13 @@ from .embed import SpeakerEmbedder, WeSpeakerEmbedder
 from .pipeline import VoicePipeline
 from .quality import assess, split_long_segment
 from .segment import DiarizingSegmenter, Segmenter, VadSegmenter, merge_adjacent
+from .transcribe import (
+    Transcriber,
+    Utterance,
+    WhisperTranscriber,
+    render,
+    transcribe_segments,
+)
 from .types import (
     RecordingResult,
     SegmentQuality,
@@ -32,6 +39,8 @@ __all__ = [
     "Segmenter",
     "SpeakerEmbedder",
     "SpeechSegment",
+    "Transcriber",
+    "Utterance",
     "VadSegmenter",
     "VoiceMatchConfig",
     "VoicePipeline",
@@ -40,8 +49,11 @@ __all__ = [
     "VoiceResult",
     "VoiceTimings",
     "WeSpeakerEmbedder",
+    "WhisperTranscriber",
     "WearerConfig",
     "assess",
     "merge_adjacent",
+    "render",
+    "transcribe_segments",
     "split_long_segment",
 ]

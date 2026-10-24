@@ -44,6 +44,18 @@ SEGMENTATION_URL = (
 SEGMENTATION_MEMBER = "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"
 
 
+#: Whisper, ONNX-exported. Local: no API key, no network at demo time, and
+#: no per-minute cost. base.en is the default as the accuracy/size knee;
+#: tiny.en if you are bandwidth-bound, small.en if transcripts matter more
+#: than startup.
+WHISPER_SIZES = {"tiny.en": 118, "base.en": 209, "small.en": 636, "distil-small.en": 454}
+DEFAULT_WHISPER = "base.en"
+
+
+def whisper_url(size: str) -> str:
+    return f"{_RELEASES}/asr-models/sherpa-onnx-whisper-{size}.tar.bz2"
+
+
 def model_dir() -> Path:
     """Where downloaded voice models live. ``GLASSES_MODEL_DIR`` overrides."""
     root = os.environ.get("GLASSES_MODEL_DIR")
@@ -87,6 +99,35 @@ def segmentation_model() -> Path:
         target.write_bytes(member.read())
     archive.unlink(missing_ok=True)
     return target
+
+
+def whisper_model(size: str = DEFAULT_WHISPER) -> tuple[Path, Path, Path]:
+    """``(encoder, decoder, tokens)`` for a Whisper size, downloading it once."""
+    if size not in WHISPER_SIZES:
+        raise ValueError(f"unknown whisper size {size!r}; expected {sorted(WHISPER_SIZES)}")
+
+    target = model_dir() / f"whisper-{size}"
+    encoder = target / f"{size}-encoder.int8.onnx"
+    decoder = target / f"{size}-decoder.int8.onnx"
+    tokens = target / f"{size}-tokens.txt"
+    if all(p.exists() for p in (encoder, decoder, tokens)):
+        return encoder, decoder, tokens
+
+    archive = _download(whisper_url(size), model_dir() / f"whisper-{size}.tar.bz2")
+    target.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, "r:bz2") as tar:
+        for member in tar.getmembers():
+            name = Path(member.name).name
+            if name in {encoder.name, decoder.name, tokens.name}:
+                extracted = tar.extractfile(member)
+                if extracted is not None:
+                    (target / name).write_bytes(extracted.read())
+    archive.unlink(missing_ok=True)
+
+    missing = [p.name for p in (encoder, decoder, tokens) if not p.exists()]
+    if missing:
+        raise RuntimeError(f"whisper-{size} archive did not contain {missing}")
+    return encoder, decoder, tokens
 
 
 def weights_digest(path: Path | str) -> str:

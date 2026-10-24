@@ -42,6 +42,8 @@ def test_every_subcommand_parses():
         ("identify-voice", "--diarize", "--speakers", "2", "a.wav"),
         ("identify-voice", "--mic", "--seconds", "10"),
         ("forget-voice", "Dan"),
+        ("transcribe", "a.wav"),
+        ("transcribe", "--mic", "--model", "tiny.en"),
         ("voice-compare", "a.wav", "b.wav"),
         ("voice-eval", "recordings/"),
     ):
