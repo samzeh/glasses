@@ -57,20 +57,27 @@ class VoiceMatchConfig(MatchConfig):
     """Voice thresholds, separate from the face ones on purpose.
 
     Higher than the face threshold because voiceprints of different people
-    sit closer together than faces do. 0.60 has two independent supports:
-    it is the default in sherpa-onnx's own speaker-identification example,
-    and it is the only value that behaves on the real-speech sample this was
-    tested against, where a genuine pair scored 0.658 and an impostor 0.584.
+    sit closer together than faces do — and higher than you would guess.
 
-    CALIBRATE, and treat the above as weak evidence: that sample is three
-    recordings of two people, in Chinese, through an English-trained model.
-    ``glasses voice-eval`` measures it properly on your own voices, and this
-    is the number that decides how often you greet someone by a stranger's
-    name — so err high. An "unknown" costs a prompt; a confident wrong name
-    costs trust.
+    CALIBRATE. The operating range moves a long way with the microphone,
+    which is the whole reason this cannot ship as a constant:
+
+    * Public 16 kHz test clips, two speakers: genuine 0.66, impostor 0.58.
+    * A MacBook Air built-in mic, two speakers at desk distance: genuine
+      0.91, impostor 0.73.
+
+    A threshold that works on one of those is badly wrong on the other.
+    0.80 sits in the gap for the laptop case and is the shipped default
+    because that is the setup this gets developed on; sherpa-onnx's own
+    example uses 0.60, which would call a stranger by your name on that
+    hardware.
+
+    ``glasses voice-eval`` measures it on your own voices and prints the
+    number to paste here. Err high while you wait: an "unknown" costs a
+    prompt, a confident wrong name costs trust.
     """
 
-    accept_threshold: float = 0.60
+    accept_threshold: float = 0.80
     review_margin: float = 0.07
 
 
@@ -85,10 +92,13 @@ class WearerConfig:
     wearer is a conversational partner.
     """
 
-    #: Matching the wearer is an easier problem than matching a stranger, so
-    #: it gets a higher bar — a false "this is the wearer" silently discards
-    #: someone else's speech.
-    accept_threshold: float = 0.55
+    #: Higher than the gallery threshold, not lower. A false "this is the
+    #: wearer" silently discards someone else's speech, and silence is the
+    #: worst failure mode here — it looks like the pipeline working.
+    #: Measured: a different speaker on the same laptop mic scored 0.737
+    #: against the wearer, so 0.55 classified a stranger as the wearer and
+    #: dropped every one of her segments.
+    accept_threshold: float = 0.85
 
 
 @dataclass(frozen=True)

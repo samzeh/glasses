@@ -179,6 +179,21 @@ class LocalStore:
         del self.people[person_id]
         return len(removed)
 
+    def forget_templates(self, person_id: str, *, kind: str) -> int:
+        """Drop one channel's templates for a person, keeping the rest.
+
+        Narrower than ``forget``, and for a different purpose: ``forget`` is
+        deletion on request, this is repair after a bad enrollment.
+        """
+        if person_id not in self.people:
+            raise KeyError(f"no such person: {person_id}")
+
+        doomed = [t for t in self.templates if t.person_id == person_id and t.kind == kind]
+        for template in doomed:
+            self._vectors.pop(template.id, None)
+        self.templates = [t for t in self.templates if t not in doomed]
+        return len(doomed)
+
     # --- reading -----------------------------------------------------------
 
     def gallery(self, kind: str = "face") -> InMemoryGallery:

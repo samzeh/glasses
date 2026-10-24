@@ -142,17 +142,24 @@ def cmd_enroll_voice(args: argparse.Namespace) -> int:
 
 def _enroll_from(args, store, pipeline, recordings, person_id):  # type: ignore[no-untyped-def]
     embeddings, scores, sources = [], [], []
+    skipped_as_wearer = 0
     for label, samples in recordings:
         result = pipeline.process(samples)
         kept = 0
         for item in result.segments:
             if item.embedding is None:
                 continue
-            if args.wearer or not item.is_wearer:
-                embeddings.append(item.embedding)
-                scores.append(item.quality.score)
-                sources.append(f"{label}@{item.segment.start_s:.1f}s")
-                kept += 1
+            if args.exclude_wearer and not args.wearer and item.is_wearer:
+                # Enrolling someone else, but this segment matched the
+                # enrolled wearer. Counted and reported rather than dropped
+                # quietly: when it happens to every segment, the cause is
+                # almost always that the wearer enrollment itself is wrong.
+                skipped_as_wearer += 1
+                continue
+            embeddings.append(item.embedding)
+            scores.append(item.quality.score)
+            sources.append(f"{label}@{item.segment.start_s:.1f}s")
+            kept += 1
         print(
             f"  {label}: {len(result.segments)} segments, {kept} usable "
             f"({result.speech_s:.0f}s speech of {result.audio_duration_s:.0f}s)"
@@ -162,6 +169,21 @@ def _enroll_from(args, store, pipeline, recordings, person_id):  # type: ignore[
                 print(f"      skip {item.segment.start_s:6.1f}s  {_describe(item, store)}")
 
     if not embeddings:
+        if skipped_as_wearer:  # only reachable with --exclude-wearer
+            wearer = store.wearer()
+            name = wearer.display_name if wearer else "the wearer"
+            print(
+                f"\nNothing was enrolled: all {skipped_as_wearer} usable "
+                f"segment(s) matched {name}, the enrolled wearer.\n\n"
+                f"If this recording really is {args.name} and not {name}, "
+                f"then {name}'s wearer voiceprint is wrong — most likely it "
+                "was enrolled from the wrong recording. Fix it with:\n"
+                f'    glasses forget-voice "{name}"\n'
+                f'    glasses enroll-voice --name "{name}" --consent … '
+                "--wearer --mic",
+                file=sys.stderr,
+            )
+            return 1
         print(
             "\nNothing passed the quality gate, so nothing was enrolled.\n"
             "The usual cause is duration: segments need 3+ seconds of "
@@ -169,6 +191,9 @@ def _enroll_from(args, store, pipeline, recordings, person_id):  # type: ignore[
             file=sys.stderr,
         )
         return 1
+
+    if skipped_as_wearer:
+        print(f"  ({skipped_as_wearer} segment(s) skipped as the wearer)")
 
     person_id = store.enroll(
         args.name,
@@ -287,6 +312,28 @@ def cmd_voice_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_forget_voice(args: argparse.Namespace) -> int:
+    """Remove a person's voiceprints, keeping their face templates.
+
+    `forget` is all-or-nothing by design -- it is the deletion-on-request
+    path. This is the narrower repair tool for when one channel was enrolled
+    wrongly and re-recording it is the fix.
+    """
+    store = LocalStore.load(args.store)
+    person = store.find_by_name(args.who) or store.people.get(args.who)
+    if person is None:
+        print(f"no such person: {args.who}", file=sys.stderr)
+        return 1
+
+    removed = store.forget_templates(person.id, kind=VOICE)
+    store.save()
+    print(
+        f"removed {removed} voiceprint(s) from {person.display_name}; "
+        f"{store.template_count(person.id, 'face')} face template(s) kept"
+    )
+    return 0
+
+
 def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     check = subparsers.add_parser("voice-check", help="verify voice models and the wearer")
     check.set_defaults(func=cmd_voice_check)
@@ -307,6 +354,14 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     )
     enroll.add_argument("--diarize", action="store_true", help="recording has several voices")
     enroll.add_argument(
+        "--exclude-wearer",
+        action="store_true",
+        help="drop segments matching the enrolled wearer. For enrolling "
+        "someone from a recording of a conversation you were part of. Off by "
+        "default: when you pass --name you have said who this is, and the "
+        "system should not overrule you",
+    )
+    enroll.add_argument(
         "--mic", action="store_true", help="record from the microphone now, no files needed"
     )
     enroll.add_argument("--seconds", type=int, default=20, help="how long to record (default 20)")
@@ -320,6 +375,12 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     identify.add_argument("--speakers", type=int, default=-1, help="pin the speaker count")
     identify.add_argument("audio", nargs="+")
     identify.set_defaults(func=cmd_identify_voice)
+
+    forget_voice = subparsers.add_parser(
+        "forget-voice", help="remove a person's voiceprints, keeping their face"
+    )
+    forget_voice.add_argument("who", help="name or id")
+    forget_voice.set_defaults(func=cmd_forget_voice)
 
     evaluate = subparsers.add_parser(
         "voice-eval", help="calibrate accept_threshold on <person>/<recording> folders"
