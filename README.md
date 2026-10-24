@@ -105,6 +105,43 @@ Normal, and worth reading rather than fighting. Check in this order:
 - Is `iod` under 80px? Then the face is too small for the embedder and the
   answer is to get closer or raise the resolution, not to lower the threshold.
 
+## Voice: who is speaking
+
+The second identity channel. Transcription is deliberately **not** here —
+this answers "which enrolled person is this voice", which no speech-to-text
+API does. They transcribe sound; they do not track people across recordings.
+Pair it with whatever STT you like.
+
+```sh
+glasses voice-check                                        # fetch models, ~36 MB
+glasses enroll-voice --name "Sam" --consent "myself" --wearer me.wav
+glasses enroll-voice --name "Dan" --consent "asked him" dan/
+glasses identify-voice conversation.wav --diarize --speakers 2
+```
+
+**Enroll yourself as `--wearer` first.** Your voice is the loudest thing the
+mic ever hears and is partly bone-conducted, so it is both the easiest to
+recognise and the biggest source of mis-attribution — without it, your own
+speech becomes facts about the person opposite. Enrolled once, it turns
+open-set diarization into a binary question.
+
+Segments need **3+ seconds of continuous speech**. That is the dominant term
+in the whole pipeline: published work shows EER rising by roughly half going
+from 3.6 s to 2.1 s, before any noise. A conversation is mostly backchannels,
+so expect most of it to be thrown away, and that is correct.
+
+### Calibrate the threshold before trusting a name
+
+```sh
+glasses voice-compare a.wav b.wav c.wav     # are these voices separable at all?
+glasses voice-eval recordings/              # <person>/<recording>.wav -> a threshold
+```
+
+`accept_threshold` defaults to 0.60, which has two weak supports: it is
+sherpa-onnx's own example default, and it is correct on the three-recording
+real-speech sample this was tested against (genuine 0.658, impostor 0.584).
+That is not a calibration. `voice-eval` does it properly on your voices.
+
 ### Every command
 
 | command | what it does |
@@ -118,6 +155,11 @@ Normal, and worth reading rather than fighting. Check in this order:
 | `glasses forget "Sam"` | delete a person and all their data, in one operation |
 | `glasses calibrate-pose frames/` | measure `nose_frontal_fraction` for your camera |
 | `glasses bench frames/` | per-stage latency against the budget |
+| `glasses voice-check` | fetch the voice models, report the wearer |
+| `glasses enroll-voice --name N --consent "…" audio/` | add a voice (`--wearer` for yourself) |
+| `glasses identify-voice audio/` | who is speaking (`--diarize` for several voices) |
+| `glasses voice-compare a.wav b.wav` | pairwise similarity between recordings |
+| `glasses voice-eval recordings/` | calibrate `accept_threshold` on your own voices |
 
 `--store DIR` moves the gallery, `--help` works on any subcommand.
 
@@ -165,9 +207,23 @@ src/glasses/
     verification.py  TAR at a fixed FAR, swept over gallery size
   db/
     schema.sql     the full data model, not only the face tables
+  voice/
+    config.py      thresholds; min_duration_s is the one that matters
+    audio.py       WAV/ffmpeg loading, resampling, level and SNR
+    segment.py     VAD, and pyannote diarization, behind one Protocol
+    quality.py     the gate: duration, level, SNR, clipping
+    embed.py       WeSpeaker CAM++, 512-d
+    models.py      model downloads; no HF token, no torch
+    pipeline.py    segment -> merge -> gate -> embed -> wearer -> match
+  identity/        shared by both channels: Embedding, gallery, matcher
   store.py       file-backed people + templates, for M0
   cli.py         glasses check / enroll / identify / watch / bench
+  voice_cli.py   the voice subcommands
 ```
+
+Faces and voices share `identity/` entirely — the gallery, the top-3
+matcher, the three-way resolve and the `model_version` discipline are
+modality-agnostic. The voice pipeline added no matching code of its own.
 
 Everything holding real logic runs on numpy alone. Only `detect.py` and
 `embed.py` need model weights, and both sit behind Protocols, so the suite runs
@@ -260,6 +316,13 @@ will not notice without the chart.
   on 6 faces. A weak-perspective PnP solve against a canonical 3D 5-point
   model is the principled upgrade, once there is a held-out set to score it on.
 - `watch` has been exercised on still images but not on a live camera here.
+- The voice threshold is supported by three recordings of two people, in
+  Chinese, through an English-trained model. Run `voice-eval` before relying
+  on a name.
+- `DiarizingSegmenter` runs and is wired up, but has not been checked against
+  a recording with known speaker turns — only the single-speaker path has.
+- ReDimNet is the voice equivalent of the AdaFace swap: least cross-domain
+  degradation of the current crop, which is what far-field audio needs.
 - `PgVectorGallery` is written but untested — it needs a Postgres with
   pgvector to test against.
 - No anti-spoofing and no re-identification across clothing changes. Both are

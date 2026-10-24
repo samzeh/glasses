@@ -22,9 +22,11 @@ class Embedding:
     gallery search filters on both. Without them a model swap silently mixes
     incomparable vectors in one index and recognition quietly collapses.
 
-    They also keep modalities apart for free: a 192-d ECAPA voiceprint and a
-    512-d ArcFace template can share a store because no search will ever
-    consider both.
+    They are also what keeps modalities apart, and that is load-bearing
+    rather than incidental: WeSpeaker CAM++ voiceprints and ArcFace face
+    templates are *both* 512-d, so width distinguishes nothing. A gallery
+    that filtered on dimension alone would happily score a face against a
+    voice and return a confident number. Only ``model_name`` separates them.
     """
 
     vector: np.ndarray  # (dim,) float32, L2-normalized

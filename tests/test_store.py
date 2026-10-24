@@ -129,3 +129,94 @@ def test_models_reports_a_half_finished_re_embedding(tmp_path):
 
 def test_a_name_is_shown_for_an_unknown_person():
     assert LocalStore("unused").name_of(None) == "unknown"
+
+
+# --- two channels in one store --------------------------------------------
+
+
+def test_face_and_voice_templates_live_side_by_side(tmp_path):
+    """One person, two biometric channels. The schema says a person has both,
+    so the store has to as well."""
+    store = LocalStore.load(tmp_path)
+    dan = store.enroll("Dan", [unit([1.0, 0.0, 0.0])], consent_note=CONSENT)
+    store.enroll("Dan", [unit([0.0, 1.0, 0.0])], consent_note=CONSENT, person_id=dan, kind="voice")
+    store.save()
+
+    reloaded = LocalStore.load(tmp_path)
+
+    assert len(reloaded) == 1
+    assert reloaded.template_count(dan) == 2
+    assert reloaded.template_count(dan, "face") == 1
+    assert reloaded.template_count(dan, "voice") == 1
+
+
+def test_a_gallery_never_mixes_the_two_channels(tmp_path):
+    """CAM++ voiceprints and ArcFace faces are both 512-d, so nothing about
+    the vector itself would stop a cross-modality comparison returning a
+    confident number."""
+    store = LocalStore.load(tmp_path)
+    dan = store.enroll("Dan", [unit([1.0, 0.0, 0.0])], consent_note=CONSENT)
+    store.enroll("Dan", [unit([0.0, 1.0, 0.0])], consent_note=CONSENT, person_id=dan, kind="voice")
+
+    assert len(store.gallery("face")) == 1
+    assert len(store.gallery("voice")) == 1
+    assert store.gallery("face").search(unit([0.0, 1.0, 0.0]))[0].similarity < 0.5
+
+
+def test_a_store_written_before_voice_existed_still_loads(tmp_path):
+    """Templates with no `kind` are faces, which is what they were."""
+    import json
+
+    store = LocalStore.load(tmp_path)
+    store.enroll("Dan", [unit([1.0, 0.0, 0.0])], consent_note=CONSENT)
+    store.save()
+
+    index_path = tmp_path / LocalStore.INDEX
+    index = json.loads(index_path.read_text())
+    for template in index["templates"]:
+        del template["kind"]
+        del template["is_wearer"]
+    index_path.write_text(json.dumps(index))
+
+    reloaded = LocalStore.load(tmp_path)
+
+    assert reloaded.templates[0].kind == "face"
+    assert len(reloaded.gallery("face")) == 1
+
+
+# --- the wearer ------------------------------------------------------------
+
+
+def test_the_wearer_is_excluded_from_the_gallery(tmp_path):
+    """Leaving the wearer in means every one of their own utterances matches
+    them as a conversational partner."""
+    store = LocalStore.load(tmp_path)
+    store.enroll("Sam", [unit([1.0, 0.0, 0.0])], consent_note=CONSENT, kind="voice", is_wearer=True)
+    store.enroll("Dan", [unit([0.0, 1.0, 0.0])], consent_note=CONSENT, kind="voice")
+
+    gallery = store.gallery("voice")
+
+    assert len(gallery) == 1
+    assert gallery.person_ids == {store.find_by_name("Dan").id}
+
+
+def test_wearer_embeddings_are_available_separately(tmp_path):
+    store = LocalStore.load(tmp_path)
+    store.enroll(
+        "Sam",
+        [unit([1.0, 0.0, 0.0]), unit([0.9, 0.1, 0.0])],
+        consent_note=CONSENT,
+        kind="voice",
+        is_wearer=True,
+    )
+    store.save()
+
+    reloaded = LocalStore.load(tmp_path)
+
+    assert len(reloaded.wearer_embeddings()) == 2
+    assert reloaded.wearer().display_name == "Sam"
+
+
+def test_with_nobody_enrolled_there_is_no_wearer(tmp_path):
+    assert LocalStore.load(tmp_path).wearer() is None
+    assert LocalStore.load(tmp_path).wearer_embeddings() == []

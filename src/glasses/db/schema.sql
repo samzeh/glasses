@@ -81,7 +81,10 @@ CREATE INDEX face_template_model_idx ON face_template (model_name, model_version
 CREATE TABLE voice_template (
     id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     person_id           uuid NOT NULL REFERENCES person (id) ON DELETE CASCADE,
-    embedding           vector(192) NOT NULL,  -- ECAPA-TDNN
+    -- 512-d for WeSpeaker CAM++. Note this is the same width as
+    -- face_template: nothing but model_name keeps the two apart, which
+    -- is why every search filters on it.
+    embedding           vector(512) NOT NULL,
     model_name          text NOT NULL,
     model_version       text NOT NULL,
     source_encounter_id uuid REFERENCES encounter (id) ON DELETE SET NULL,

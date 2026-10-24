@@ -1,0 +1,296 @@
+"""Voice subcommands, wired into the ``glasses`` CLI.
+
+Kept beside ``cli.py`` rather than inside it because the two halves share
+only the store and the argument parser.
+"""
+
+from __future__ import annotations
+
+import argparse
+import itertools
+import sys
+from pathlib import Path
+
+import numpy as np
+
+from .identity.vectors import cosine_similarity
+from .store import LocalStore
+from .voice import (
+    DiarizingSegmenter,
+    VadSegmenter,
+    VoicePipeline,
+    VoicePipelineConfig,
+    WeSpeakerEmbedder,
+)
+from .voice.audio import load_audio
+from .voice.models import ensure_all, weights_digest
+
+AUDIO_SUFFIXES = {".wav", ".wave", ".mp3", ".m4a", ".flac", ".aiff", ".aif", ".ogg", ".opus"}
+VOICE = "voice"
+
+
+def expand_audio(paths: list[str]) -> list[Path]:
+    out: list[Path] = []
+    for raw in paths:
+        path = Path(raw)
+        if path.is_dir():
+            out.extend(sorted(p for p in path.rglob("*") if p.suffix.lower() in AUDIO_SUFFIXES))
+        else:
+            out.append(path)
+    return out
+
+
+def build_voice_pipeline(
+    store: LocalStore,
+    *,
+    diarize: bool = False,
+    num_speakers: int = -1,
+) -> VoicePipeline:
+    segmenter = DiarizingSegmenter(num_speakers=num_speakers) if diarize else VadSegmenter()
+    return VoicePipeline(
+        segmenter=segmenter,
+        embedder=WeSpeakerEmbedder(),
+        gallery=store.gallery(VOICE),
+        wearer_embeddings=store.wearer_embeddings(),
+        config=VoicePipelineConfig(),
+    )
+
+
+def _describe(result, store: LocalStore) -> str:  # type: ignore[no-untyped-def]
+    quality = result.quality
+    detail = (
+        f"{quality.duration_s:5.1f}s snr={quality.snr_db:3.0f}dB rms={quality.rms_dbfs:4.0f}dBFS"
+    )
+    if not quality.passed:
+        return f"rejected ({', '.join(quality.failures)})  {detail}"
+    if result.is_wearer:
+        return f"WEARER  {detail}"
+    match = result.match
+    if match is None or match.person_id is None:
+        best = f" best={match.similarity:.3f}" if match else ""
+        return f"unknown{best}  {detail}"
+    prefix = "" if match.is_identified else "possibly "
+    return f"{prefix}{store.name_of(match.person_id)} ({match.similarity:.3f})  {detail}"
+
+
+# --- commands --------------------------------------------------------------
+
+
+def cmd_voice_check(args: argparse.Namespace) -> int:
+    print("voice models")
+    try:
+        for name, path in ensure_all().items():
+            size = path.stat().st_size / 1e6
+            print(f"  {name:14s} {size:6.1f} MB  {weights_digest(path)}  {path.name}")
+    except Exception as error:  # noqa: BLE001 - this command reports, never raises
+        print(f"  unavailable: {error}")
+        return 1
+
+    store = LocalStore.load(args.store)
+    wearer = store.wearer()
+    print(f"\nstore         {args.store}")
+    print(f"  voiceprints {store.template_count_by_kind(VOICE)}")
+    print(f"  wearer      {wearer.display_name if wearer else 'NOT ENROLLED'}")
+    if wearer is None:
+        print("    Without a wearer voiceprint, your own speech is treated as a")
+        print("    conversational partner's. Run: glasses enroll-voice --wearer …")
+    return 0
+
+
+def cmd_enroll_voice(args: argparse.Namespace) -> int:
+    store = LocalStore.load(args.store)
+    pipeline = build_voice_pipeline(store, diarize=args.diarize)
+
+    existing = store.find_by_name(args.name)
+    person_id = existing.id if existing else None
+
+    embeddings, scores, sources = [], [], []
+    for path in expand_audio(args.audio):
+        try:
+            samples = load_audio(path)
+        except Exception as error:  # noqa: BLE001
+            print(f"  ! {path.name}: {error}", file=sys.stderr)
+            continue
+
+        result = pipeline.process(samples)
+        kept = 0
+        for item in result.segments:
+            if item.embedding is None:
+                continue
+            if args.wearer or not item.is_wearer:
+                embeddings.append(item.embedding)
+                scores.append(item.quality.score)
+                sources.append(f"{path.name}@{item.segment.start_s:.1f}s")
+                kept += 1
+        print(
+            f"  {path.name}: {len(result.segments)} segments, {kept} usable "
+            f"({result.speech_s:.0f}s speech of {result.audio_duration_s:.0f}s)"
+        )
+        for item in result.segments:
+            if item.embedding is None:
+                print(f"      skip {item.segment.start_s:6.1f}s  {_describe(item, store)}")
+
+    if not embeddings:
+        print(
+            "\nNothing passed the quality gate, so nothing was enrolled.\n"
+            "The usual cause is duration: segments need 3+ seconds of "
+            "continuous speech. Record a longer, uninterrupted stretch.",
+            file=sys.stderr,
+        )
+        return 1
+
+    person_id = store.enroll(
+        args.name,
+        embeddings,
+        consent_note=args.consent,
+        quality_scores=scores,
+        source=",".join(sources),
+        person_id=person_id,
+        kind=VOICE,
+        is_wearer=args.wearer,
+    )
+    store.save()
+    role = "wearer" if args.wearer else "person"
+    print(f"\nenrolled {args.name} as {role} {person_id[:8]} with {len(embeddings)} voiceprint(s)")
+    return 0
+
+
+def cmd_identify_voice(args: argparse.Namespace) -> int:
+    store = LocalStore.load(args.store)
+    if store.template_count_by_kind(VOICE) == 0:
+        print("No voiceprints enrolled — run enroll-voice first.", file=sys.stderr)
+        return 1
+
+    pipeline = build_voice_pipeline(store, diarize=args.diarize, num_speakers=args.speakers)
+    for path in expand_audio(args.audio):
+        samples = load_audio(path)
+        result = pipeline.process(samples)
+        print(f"{path.name}  ({result.audio_duration_s:.0f}s)")
+        if not result.segments:
+            print("  no speech")
+            continue
+        for item in result.segments:
+            turn = "" if item.segment.speaker is None else f"spk{item.segment.speaker} "
+            print(f"  {item.segment.start_s:6.1f}s  {turn}{_describe(item, store)}")
+        print(f"  {result.timings.total_ms:.0f} ms")
+    return 0
+
+
+def cmd_voice_eval(args: argparse.Namespace) -> int:
+    """Calibrate the accept threshold on your own voices.
+
+    Takes a directory of ``<person>/<recording>.wav`` and reports the
+    genuine/impostor separation plus the operating point at a target FAR.
+    This is the command that turns the shipped threshold from a guess into a
+    measurement, and the voice threshold badly needs it.
+    """
+    from .evaluation import operating_point_at_far, score_pairs
+
+    root = Path(args.directory)
+    people = sorted(p for p in root.iterdir() if p.is_dir())
+    if len(people) < 2:
+        print(f"need at least 2 person folders under {root}", file=sys.stderr)
+        return 1
+
+    store = LocalStore.load(args.store)
+    pipeline = build_voice_pipeline(store)
+
+    vectors, labels = [], []
+    for person in people:
+        count = 0
+        for path in sorted(p for p in person.rglob("*") if p.suffix.lower() in AUDIO_SUFFIXES):
+            for item in pipeline.process(load_audio(path)).embedded:
+                vectors.append(item.embedding.vector)
+                labels.append(person.name)
+                count += 1
+        print(f"  {person.name:20s} {count} usable segment(s)")
+
+    if len(vectors) < 4:
+        print("\nnot enough usable segments to measure anything", file=sys.stderr)
+        return 1
+
+    genuine, impostor = score_pairs(np.array(vectors), labels)
+    if genuine.size == 0 or impostor.size == 0:
+        print("\nneed at least two recordings of one person, and two people", file=sys.stderr)
+        return 1
+
+    print(
+        f"\ngenuine pairs   n={genuine.size:4d}  mean {genuine.mean():.3f}  min {genuine.min():.3f}"
+    )
+    print(
+        f"impostor pairs  n={impostor.size:4d}  mean {impostor.mean():.3f}  "
+        f"max {impostor.max():.3f}"
+    )
+    separable = genuine.min() > impostor.max()
+    print(f"separable       {'yes' if separable else 'NO — overlapping distributions'}")
+
+    point = operating_point_at_far(genuine, impostor, args.far)
+    print(f"\nat FAR <= {args.far:.0%}:  {point}")
+    print(f"\n  accept_threshold = {point.threshold:.3f}   <- put this in VoiceMatchConfig")
+    if genuine.size < 20 or impostor.size < 100:
+        print("\nToo few pairs to trust. Aim for 5+ people with 3+ recordings each.")
+    return 0
+
+
+def cmd_voice_compare(args: argparse.Namespace) -> int:
+    """Pairwise similarity between recordings. The quickest way to see
+    whether two voices are separable at all before tuning anything."""
+    store = LocalStore.load(args.store)
+    pipeline = build_voice_pipeline(store)
+
+    vectors: dict[str, np.ndarray] = {}
+    for path in expand_audio(args.audio):
+        embedded = pipeline.process(load_audio(path)).embedded
+        if not embedded:
+            print(f"  ! {path.name}: nothing passed the gate", file=sys.stderr)
+            continue
+        vectors[path.stem] = embedded[0].embedding.vector
+
+    if len(vectors) < 2:
+        print("need at least two usable recordings", file=sys.stderr)
+        return 1
+
+    width = max(len(k) for k in vectors)
+    for a, b in itertools.combinations(vectors, 2):
+        print(f"  {a:{width}s}  {b:{width}s}  {cosine_similarity(vectors[a], vectors[b]):.3f}")
+    return 0
+
+
+def register(subparsers) -> None:  # type: ignore[no-untyped-def]
+    check = subparsers.add_parser("voice-check", help="verify voice models and the wearer")
+    check.set_defaults(func=cmd_voice_check)
+
+    enroll = subparsers.add_parser("enroll-voice", help="add a person's voice from recordings")
+    enroll.add_argument("--name", required=True)
+    enroll.add_argument(
+        "--consent",
+        required=True,
+        help="who agreed to this and when — recorded with the person, and required",
+    )
+    enroll.add_argument(
+        "--wearer",
+        action="store_true",
+        help="this is you. Enroll once at setup: it turns open-set diarization "
+        "into a binary question and keeps your own speech out of other "
+        "people's profiles",
+    )
+    enroll.add_argument("--diarize", action="store_true", help="recording has several voices")
+    enroll.add_argument("audio", nargs="+")
+    enroll.set_defaults(func=cmd_enroll_voice)
+
+    identify = subparsers.add_parser("identify-voice", help="who is speaking in a recording")
+    identify.add_argument("--diarize", action="store_true", help="split by speaker first")
+    identify.add_argument("--speakers", type=int, default=-1, help="pin the speaker count")
+    identify.add_argument("audio", nargs="+")
+    identify.set_defaults(func=cmd_identify_voice)
+
+    evaluate = subparsers.add_parser(
+        "voice-eval", help="calibrate accept_threshold on <person>/<recording> folders"
+    )
+    evaluate.add_argument("directory")
+    evaluate.add_argument("--far", type=float, default=0.01, help="target false-accept rate")
+    evaluate.set_defaults(func=cmd_voice_eval)
+
+    compare = subparsers.add_parser("voice-compare", help="pairwise similarity between recordings")
+    compare.add_argument("audio", nargs="+")
+    compare.set_defaults(func=cmd_voice_compare)

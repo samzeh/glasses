@@ -19,6 +19,7 @@ import numpy as np
 from .face import FacePipeline, PipelineConfig
 from .face.types import FrameResult, MatchStatus
 from .store import LocalStore
+from .voice_cli import register as register_voice
 
 DEFAULT_STORE = Path("glasses-store")
 
@@ -562,6 +563,8 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("images", nargs="+")
     bench.add_argument("--repeat", type=int, default=5)
     bench.set_defaults(func=cmd_bench)
+
+    register_voice(subparsers)
 
     return parser
 

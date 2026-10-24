@@ -51,6 +51,13 @@ class TemplateRecord:
     quality_score: float
     source: str
     created_at: str = field(default_factory=_now)
+    #: "face" or "voice". Defaulted so stores written before voice existed
+    #: still load, and because a bare template is a face template
+    #: historically. Galleries are always built per-kind.
+    kind: str = "face"
+    #: Set on the wearer's own voiceprints. Their speech is never attributed
+    #: to a conversational partner, so it must be distinguishable.
+    is_wearer: bool = False
 
 
 class LocalStore:
@@ -109,6 +116,8 @@ class LocalStore:
         quality_scores: list[float] | None = None,
         source: str = "",
         person_id: str | None = None,
+        kind: str = "face",
+        is_wearer: bool = False,
     ) -> str:
         """Add templates for a person, creating them if they are new.
 
@@ -146,6 +155,8 @@ class LocalStore:
                     model_version=embedding.model_version,
                     quality_score=float(score),
                     source=source,
+                    kind=kind,
+                    is_wearer=is_wearer,
                 )
             )
             self._vectors[template_id] = np.asarray(embedding.vector, dtype=np.float32)
@@ -170,7 +181,18 @@ class LocalStore:
 
     # --- reading -----------------------------------------------------------
 
-    def gallery(self) -> InMemoryGallery:
+    def gallery(self, kind: str = "face") -> InMemoryGallery:
+        """Templates of one kind, as a searchable gallery.
+
+        Always scoped by kind. CAM++ voiceprints and ArcFace faces are both
+        512-d, so a gallery holding the two would compare them happily and
+        return a plausible number; model_name filtering in the search would
+        catch it, but relying on that alone leaves no margin.
+
+        The wearer is excluded: they are not someone you are trying to
+        recognise across encounters, and leaving them in means every one of
+        their own utterances matches them as a "conversational partner".
+        """
         return InMemoryGallery(
             [
                 GalleryEntry(
@@ -183,9 +205,25 @@ class LocalStore:
                     ),
                 )
                 for t in self.templates
-                if t.id in self._vectors
+                if t.id in self._vectors and t.kind == kind and not t.is_wearer
             ]
         )
+
+    def wearer_embeddings(self) -> list[Embedding]:
+        """The wearer's enrolled voiceprints, for the pipeline's wearer check."""
+        return [
+            Embedding(
+                vector=self._vectors[t.id],
+                model_name=t.model_name,
+                model_version=t.model_version,
+            )
+            for t in self.templates
+            if t.is_wearer and t.id in self._vectors
+        ]
+
+    def wearer(self) -> Person | None:
+        ids = {t.person_id for t in self.templates if t.is_wearer}
+        return self.people.get(next(iter(ids))) if len(ids) == 1 else None
 
     def name_of(self, person_id: str | None) -> str:
         if person_id is None:
@@ -197,16 +235,27 @@ class LocalStore:
         needle = display_name.strip().casefold()
         return next((p for p in self.people.values() if p.display_name.casefold() == needle), None)
 
-    def template_count(self, person_id: str) -> int:
-        return sum(1 for t in self.templates if t.person_id == person_id)
+    def template_count(self, person_id: str, kind: str | None = None) -> int:
+        return sum(
+            1
+            for t in self.templates
+            if t.person_id == person_id and (kind is None or t.kind == kind)
+        )
 
-    def models(self) -> set[tuple[str, str]]:
+    def template_count_by_kind(self, kind: str) -> int:
+        return sum(1 for t in self.templates if t.kind == kind)
+
+    def models(self, kind: str | None = None) -> set[tuple[str, str]]:
         """Which (model_name, model_version) pairs the store holds.
 
         More than one means part of the gallery is invisible to any given
         probe, which is the symptom of a half-finished re-embedding.
         """
-        return {(t.model_name, t.model_version) for t in self.templates}
+        return {
+            (t.model_name, t.model_version)
+            for t in self.templates
+            if kind is None or t.kind == kind
+        }
 
     def __len__(self) -> int:
         return len(self.people)
