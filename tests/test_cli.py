@@ -33,20 +33,42 @@ def test_camera_enrollment_skips_frames_with_multiple_faces(monkeypatch):
     camera.read.return_value = (True, object())
     cv2 = SimpleNamespace(VideoCapture=lambda _: camera)
     monkeypatch.setattr(cli, "_require_cv2", lambda: cv2)
-    ambiguous = SimpleNamespace(embedding=unit([1.0, 0.0]),
-                                quality=SimpleNamespace(score=0.9))
-    single = SimpleNamespace(embedding=unit([0.0, 1.0]),
-                             quality=SimpleNamespace(score=0.9))
+    ambiguous = SimpleNamespace(embedding=unit([1.0, 0.0]), quality=SimpleNamespace(score=0.9))
+    single = SimpleNamespace(embedding=unit([0.0, 1.0]), quality=SimpleNamespace(score=0.9))
     pipeline = Mock()
     pipeline.process_frame.side_effect = [
         SimpleNamespace(primary=ambiguous, faces=(ambiguous, single)),
         SimpleNamespace(primary=single, faces=(single,)),
     ]
-    args = parse("enroll", "--name", "Samuel", "--consent", "yes", "--camera",
-                 "--frames", "1", "--headless")
+    args = parse(
+        "enroll", "--name", "Samuel", "--consent", "yes", "--camera", "--frames", "1", "--headless"
+    )
     embeddings, _, _ = cli.capture_enrollment(args, pipeline)
     assert embeddings == [single.embedding]
     camera.release.assert_called_once()
+
+
+def test_photo_enrollment_rejects_ambiguous_frames_without_saving(tmp_path, monkeypatch):
+    from glasses import cli
+
+    face = SimpleNamespace(embedding=unit([1.0, 0.0]), quality=SimpleNamespace(score=0.9))
+    result = SimpleNamespace(primary=face, faces=(face, face))
+    monkeypatch.setattr(
+        cli, "build_pipeline", lambda _: SimpleNamespace(process_frame=lambda _: result)
+    )
+    monkeypatch.setattr(cli, "read_frames", lambda paths: [(paths[0], object())])
+    args = parse(
+        "--store",
+        str(tmp_path),
+        "enroll",
+        "--name",
+        "Fixture",
+        "--consent",
+        "agreed",
+        "two-people.jpg",
+    )
+    assert cmd_enroll(args) == 1
+    assert not (tmp_path / "index.json").exists()
 
 
 def parse(*argv: str):

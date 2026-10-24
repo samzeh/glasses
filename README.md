@@ -436,8 +436,9 @@ the assistant manage the database; the app needs this URL separately.
 .venv/bin/glasses db stats
 ```
 
-`db init` applies the schema to a new database and stops if it is already
-initialized. On first setup it reports both observation hypertables and the
+`db init` applies the schema to a new database. For an existing database it
+applies the cloud enrollment upgrade without resetting saved data. Run it
+after updating this branch. On first setup it reports both observation hypertables and the
 two real-time continuous aggregates. Use `db stats` to verify the connection,
 row counts, and live per-minute view. The schema enables compression after
 7 days and raw observation retention of 90 days.
@@ -461,6 +462,9 @@ preserved. Original gallery files and files under `data/` are archived
 byte-for-byte in `local_import_file`, including photos. Model weights and
 configuration stay on your machine. Migration stops on conflicting data.
 Use `--local-store path` and `--media-dir path` for other source directories.
+`glasses forget "Sam"` also deletes archived source files associated with that
+person. Shared source archives are removed in full; other people's canonical
+database records stay intact.
 
 Elasticsearch remains a derived index; automatic syncing from TigerData is
 not implemented. `search-index` and `search-seed` still run manually.
@@ -481,8 +485,8 @@ glasses db stats     # what is in there, and the live per-minute view
 
 `timescaledb-ha:pg17` is the image to use rather than plain `postgres`: it
 ships TimescaleDB, pgvector and pgvectorscale together, which is the whole
-claim being made here. `glasses db init` is idempotent — it says so and stops
-if the schema is already applied; `--reset` drops everything first.
+claim being made here. `glasses db init` can be rerun safely to apply cloud
+enrollment upgrades; `--reset` drops everything first.
 
 ### What the schema does with it
 
