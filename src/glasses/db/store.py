@@ -1,6 +1,6 @@
 """A Postgres-backed store: the same operations as ``LocalStore``, on Tiger.
 
-``LocalStore`` is the M0 store and stays the default. It holds people and
+``LocalStore`` is the offline store. It holds people and
 templates in an ``.npz`` beside a JSON index, which is right for a laptop and
 wrong for everything else: it has no encounters, no facts, no observation
 history, and it is single-process.
@@ -11,10 +11,8 @@ the observation streams go into the hypertables — one database holding the
 profile and the sensor history, which is the whole argument for using this one
 rather than a vector store beside a time-series store beside Postgres.
 
-Deliberately *parallel* rather than a replacement. The file-backed path is
-what the CLI uses and is not disturbed by anything here; the two overlap
-enough that ``enroll`` / ``gallery`` / ``forget`` mean the same thing in both,
-and the matcher cannot tell them apart.
+The CLI uses ``PgCliStore`` when DATABASE_URL is configured. The offline
+file-backed path remains available through an explicit --store argument.
 
 Consent is recorded when a caller supplies it and nothing is required: the
 columns exist, they are nullable, and this code does not ask.
@@ -130,6 +128,7 @@ class PgStore:
         is_wearer: bool = False,
         source_encounter_id: str | None = None,
         consent_note: str | None = None,
+        source: str = "",
     ) -> str:
         """Add templates for a person, creating them if they are new.
 
@@ -147,6 +146,15 @@ class PgStore:
             raise ValueError(f"got {len(embeddings)} embeddings but {len(scores)} quality scores")
 
         with self._connection.transaction():
+            if kind == VOICE and is_wearer:
+                self._connection.execute("SELECT pg_advisory_xact_lock(674521903)")
+                other = self._connection.execute(
+                    "SELECT 1 FROM voice_template WHERE is_wearer AND deleted_at IS NULL "
+                    "AND person_id IS DISTINCT FROM %s::uuid LIMIT 1",
+                    (person_id,),
+                ).fetchone()
+                if other:
+                    raise ValueError("A different wearer is already enrolled")
             if person_id is None:
                 person_id = self.add_person(display_name, consent_note=consent_note)
             with self._connection.cursor() as cursor:
@@ -155,8 +163,8 @@ class PgStore:
                         cursor.execute(
                             """
                             INSERT INTO face_template (person_id, embedding, model_name,
-                                model_version, quality_score, source_encounter_id)
-                            VALUES (%s, %s::vector, %s, %s, %s, %s)
+                                model_version, quality_score, source_encounter_id, source)
+                            VALUES (%s, %s::vector, %s, %s, %s, %s, %s)
                             """,
                             (
                                 person_id,
@@ -165,14 +173,16 @@ class PgStore:
                                 embedding.model_version,
                                 float(score),
                                 source_encounter_id,
+                                source,
                             ),
                         )
                     else:
                         cursor.execute(
                             """
                             INSERT INTO voice_template (person_id, embedding, model_name,
-                                model_version, is_wearer, source_encounter_id)
-                            VALUES (%s, %s::vector, %s, %s, %s, %s)
+                                model_version, is_wearer, source_encounter_id,
+                                source, quality_score)
+                            VALUES (%s, %s::vector, %s, %s, %s, %s, %s, %s)
                             """,
                             (
                                 person_id,
@@ -181,6 +191,8 @@ class PgStore:
                                 embedding.model_version,
                                 is_wearer,
                                 source_encounter_id,
+                                source,
+                                float(score),
                             ),
                         )
         return person_id
@@ -282,6 +294,11 @@ class PgStore:
                 {"id": person_id},
             )
             removed = int(cursor.fetchone()[0])
+            # Archives may contain shared gallery files. Erase the originals
+            # on a deletion request; other people's canonical rows stay intact.
+            cursor.execute(
+                "DELETE FROM local_import_file WHERE %s::uuid = ANY(person_ids)", (person_id,)
+            )
             cursor.execute("DELETE FROM person WHERE id = %s", (person_id,))
             if cursor.rowcount == 0:
                 raise KeyError(f"no such person: {person_id}")

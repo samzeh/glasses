@@ -15,6 +15,7 @@ from .db.connect import (
     ENV_VAR,
     LOCAL_URL,
     DatabaseUnavailable,
+    apply_cloud_migration,
     apply_schema,
     connect,
     drop_schema,
@@ -54,8 +55,9 @@ def cmd_db_init(args: argparse.Namespace) -> int:
 
     with connection:
         if is_initialised(connection) and not args.reset:
+            apply_cloud_migration(connection)
             print(
-                "Already initialised — face_template exists.\n"
+                "Already initialised — applied cloud enrollment upgrades without resetting data.\n"
                 "`glasses db init --reset` drops everything and starts over."
             )
             return 0
@@ -92,14 +94,11 @@ def _summary(connection) -> str:  # type: ignore[no-untyped-def]
 
     lines = ["\nhypertables"]
     lines += [
-        f"  {name:20s} {chunks} chunk(s)  compression "
-        f"{'on' if compressed else 'off'}"
+        f"  {name:20s} {chunks} chunk(s)  compression {'on' if compressed else 'off'}"
         for name, chunks, compressed in hypertables
     ]
     lines.append("continuous aggregates")
-    lines += [
-        f"  {name:28s} real-time {'off' if only else 'on'}" for name, only in aggregates
-    ]
+    lines += [f"  {name:28s} real-time {'off' if only else 'on'}" for name, only in aggregates]
     return "\n".join(lines)
 
 
@@ -203,6 +202,11 @@ def cmd_db_stats(args: argparse.Namespace) -> int:
 def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     db = subparsers.add_parser("db", help="apply the schema, and inspect Tiger")
     actions = db.add_subparsers(dest="db_command", required=True)
+    migrate = actions.add_parser("migrate-local", help="verify and move local data to TigerData")
+    migrate.add_argument("--local-store", default="glasses-store")
+    migrate.add_argument("--media-dir", default="data")
+    migrate.add_argument("--remove-local", action="store_true")
+    migrate.set_defaults(func=cmd_migrate_local)
     url_help = f"connection string (default: ${ENV_VAR})"
 
     init = actions.add_parser("init", help="apply schema.sql to the database")
@@ -218,3 +222,22 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     stats.add_argument("--url", default=None, help=url_help)
     stats.add_argument("--minutes", type=int, default=10, help="how many buckets to show")
     stats.set_defaults(func=cmd_db_stats)
+
+
+def cmd_migrate_local(args: argparse.Namespace) -> int:
+    from .db.migrate_local import migrate_local
+
+    with connect(autocommit=True) as connection:
+        if not is_initialised(connection):
+            raise DatabaseUnavailable("Initialize the database first with `glasses db init`.")
+        apply_cloud_migration(connection)
+        result = migrate_local(
+            connection, args.local_store, args.media_dir, remove_local=args.remove_local
+        )
+    print(
+        f"Verified in TigerData: {result['people']} people, "
+        f"{result['templates']} templates, {result['files']} archived files"
+    )
+    if args.remove_local:
+        print("Removed the verified local gallery and media files.")
+    return 0
