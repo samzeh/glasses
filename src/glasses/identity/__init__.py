@@ -14,6 +14,7 @@ from .gallery import (
     GalleryEntry,
     InMemoryGallery,
     PgVectorGallery,
+    to_pgvector,
 )
 from .match import match_embedding, resolve, score_persons
 from .types import Embedding, MatchResult, MatchStatus, PersonScore, TemplateHit
@@ -36,4 +37,5 @@ __all__ = [
     "match_embedding",
     "resolve",
     "score_persons",
+    "to_pgvector",
 ]

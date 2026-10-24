@@ -289,6 +289,10 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+cartesia = [
+    { name = "sherpa-onnx" },
+    { name = "sounddevice" },
+]
 db = [
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
@@ -311,6 +315,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "glasses", extras = ["voice"], marker = "extra == 'cartesia'" },
     { name = "insightface", marker = "extra == 'face'", specifier = ">=0.7.3" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnxruntime", marker = "extra == 'face'", specifier = ">=1.17" },
@@ -320,7 +325,7 @@ requires-dist = [
     { name = "sherpa-onnx", marker = "extra == 'voice'", specifier = ">=2.0" },
     { name = "sounddevice", marker = "extra == 'voice'", specifier = ">=0.5" },
 ]
-provides-extras = ["face", "voice", "db"]
+provides-extras = ["face", "voice", "db", "cartesia"]
 
 [package.metadata.requires-dev]
 dev = [

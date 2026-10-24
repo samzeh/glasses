@@ -39,8 +39,10 @@ people skip: **nothing can be recognised until it has been shown.**
 2. **Identify** — show it a face and ask who that is. It compares against
    everyone enrolled and answers with a name, "possibly a name", or unknown.
 
-Everything is local. There is nothing to upload and no account: the models run
-on your machine and the gallery is a directory you can delete.
+Recognition is local. There is nothing to upload and no account: the models
+run on your machine and the gallery is a directory you can delete. The one
+exception is transcription, which is a hosted call by default — see
+[Voice](#voice-who-is-speaking), and `--local` if that is not what you want.
 
 ### Step 1 — enroll yourself, from the webcam
 
@@ -116,16 +118,32 @@ Normal, and worth reading rather than fighting. Check in this order:
 The second identity channel, plus transcription on top of it. Speech-to-text
 alone cannot do this: an STT API transcribes sound, it does not track people
 across recordings. Identity comes from the gallery; the words come from
-Whisper, running locally.
+**Cartesia `ink-whisper`** when `CARTESIA_API_KEY` is set, and from Whisper
+running locally when it is not.
 
-Each speaker segment is transcribed **on its own** rather than transcribing
-the whole file and aligning word timestamps against speaker turns. The
-segment already carries an identity, so its text inherits it — there is no
-alignment step and therefore no bug where a sentence lands on the wrong
-person because two clocks disagreed by 200 ms.
+Each speaker segment is transcribed **on its own** — one request per segment
+— rather than transcribing the whole file and aligning word timestamps
+against speaker turns. The segment already carries an identity, so its text
+inherits it; there is no alignment step and therefore no bug where a sentence
+lands on the wrong person because two clocks disagreed by 200 ms. Cartesia
+returns word timings and they are deliberately ignored: the segment's own
+start and end are the timing.
+
+The local recogniser stays wired up rather than becoming dead code. A key
+expires, or a conference network refuses to resolve anything, and either way
+a slightly worse transcript beats no transcript — so a failed call falls back
+to local Whisper mid-run and says so.
+
+Nothing extra to install: the `cartesia` extra resolves to the same voice
+stack, because the API call is one multipart POST and `urllib` already does
+that. Segmentation and speaker embedding still run locally — Cartesia
+replaces Whisper, not the pipeline.
 
 ```sh
-glasses voice-check            # fetch the voice models, ~36 MB
+glasses voice-check            # fetch the voice models, ~36 MB, and say
+                               # which recogniser a transcript would use
+
+export CARTESIA_API_KEY=sk_car_…   # Cartesia transcribes; unset means local
 
 # record yourself for 20 seconds — no audio files needed
 glasses enroll-voice --name "Sam" --consent "myself" --wearer --mic
@@ -133,8 +151,16 @@ glasses enroll-voice --name "Sam" --consent "myself" --wearer --mic
 glasses enroll-voice --name "Dan" --consent "asked him" --mic --seconds 30
 glasses identify-voice --mic              # listen for 10s and say who it heard
 glasses transcribe conversation.wav       # who said what, attributed
+glasses transcribe conversation.wav --local   # keep it all on this machine
 glasses identify-voice conversation.wav --diarize --speakers 2
 ```
+
+You do not have to export anything: a `.env` beside the repo is read at
+startup, searched upwards from wherever you ran the command, so
+`CARTESIA_API_KEY=sk_car_…` in a file is enough. A variable already set in
+the shell always wins over the file. This matters more than it looks —
+without the key the transcript still arrives, quietly produced by the local
+recogniser, and the only sign is the `transcribing with …` line.
 
 `--mic` records with a live level meter, so you can see it is hearing you
 rather than discovering it was muted twenty seconds later. `--save out.wav`
@@ -329,14 +355,15 @@ from a file in this repo.
 | `glasses forget "Sam"` | delete a person and all their data, in one operation |
 | `glasses calibrate-pose frames/` | measure `nose_frontal_fraction` for your camera |
 | `glasses bench frames/` | per-stage latency against the budget |
-| `glasses voice-check` | fetch the voice models, report the wearer |
+| `glasses voice-check` | fetch the voice models, report the wearer and the recogniser |
 | `glasses enroll-voice --name N --consent "…" --mic` | record a voice now (`--wearer` for yourself) |
 | `glasses enroll-voice --name N --consent "…" audio/` | same, from audio files |
 | `glasses identify-voice --mic` | listen now and say who it heard |
 | `glasses identify-voice audio/` | same, from files (`--diarize` for several voices) |
 | `glasses forget-voice "Sam"` | drop a bad voice enrollment, keep the face one |
 | `glasses voice-compare a.wav b.wav` | pairwise similarity between recordings |
-| `glasses transcribe audio/` | who said what, attributed (`--mic` to listen now) |
+| `glasses transcribe audio/` | who said what, attributed, via Cartesia (`--mic` to listen now) |
+| `glasses transcribe audio/ --local` | the same, on local Whisper — no key, no network |
 | `glasses voice-eval recordings/` | calibrate `accept_threshold` on your own voices |
 | `glasses ask "who did I meet at Cal Hacks"` | ask the Agent Builder agent about people you have met |
 | `glasses search-check` | what Elastic is configured, reachable, and holding |
@@ -344,6 +371,8 @@ from a file in this repo.
 | `glasses agent-setup` | apply the Agent Builder tools and agent (`--dry-run`) |
 | `glasses search-seed` | load the synthetic demo encounters (`--clear` to remove) |
 | `glasses search-index audio/` | transcribe real recordings and index what was said |
+| `glasses db init` | apply `schema.sql` to Postgres (`--reset` to start over) |
+| `glasses db stats` | rows, compression, and the live per-minute view |
 
 `--store DIR` moves the gallery, `--help` works on any subcommand.
 
@@ -365,6 +394,112 @@ Tests need none of that — numpy alone:
 ```sh
 uv pip install -e . --group dev && .venv/bin/python -m pytest
 ```
+
+## Storage: TigerData, one database for both halves
+
+The store above is a directory, and that is right for M0 and wrong for
+everything after it. The real system of record is Postgres —
+**TimescaleDB + pgvector in one instance** — because this project has exactly
+the two shapes of data that are usually split across two systems, and the
+join between them *is* the product:
+
+- **Relational profiles.** A few rows per person, read constantly, written
+  rarely: who they are, which encounters they appeared in, what was learned
+  about them, and their 512-d templates. The gallery search is a pgvector
+  query against the same rows.
+- **High-frequency streams.** `face_observation` and `speech_observation`,
+  one row per visible face per span and per speech segment, on the ESP's
+  microsecond clock. Append-only, and growing with wear time rather than with
+  the number of people.
+
+"Who was in front of me while this sentence was spoken" is a join across the
+two. Hold them in separate systems and that join becomes application code
+reconciling two clocks — which is the one bug this whole design is arranged to
+avoid.
+
+### Start one
+
+```sh
+docker run -d --name glasses-tiger -p 55432:5432 \
+    -e POSTGRES_PASSWORD=glasses -e POSTGRES_DB=glasses \
+    timescale/timescaledb-ha:pg17
+
+export DATABASE_URL=postgresql://postgres:glasses@127.0.0.1:55432/glasses
+uv pip install -e '.[db]'
+
+glasses db init      # tables, hypertables, aggregates, compression, retention
+glasses db stats     # what is in there, and the live per-minute view
+```
+
+`timescaledb-ha:pg17` is the image to use rather than plain `postgres`: it
+ships TimescaleDB, pgvector and pgvectorscale together, which is the whole
+claim being made here. `glasses db init` is idempotent — it says so and stops
+if the schema is already applied; `--reset` drops everything first.
+
+### What the schema does with it
+
+| | |
+|---|---|
+| hypertables | `face_observation`, `speech_observation`, one day per chunk |
+| continuous aggregates | `face_activity_per_minute`, `speech_activity_per_minute` |
+| the live view | `encounter_minute` — both sensors, one row per encounter per minute |
+| compression | segmented by `encounter_id`, after 7 days |
+| retention | raw stream dropped after 90 days, the per-minute history kept |
+
+Three decisions in there are worth the words:
+
+**Two clocks on every observation row, and only one of them is the
+authority.** `start_device_clock_us` is the ESP's monotonic counter and is what
+binding does interval arithmetic on. `observed_at` is the same instant mapped
+through the clock's single wall anchor, and it exists because `time_bucket`,
+chunk exclusion and humans all need it. Binding never reads it back: an NTP
+step mid-encounter would reorder two observations and file a sentence against
+the wrong face.
+
+**The aggregates group by `person_id` and count distinct one level up.** A
+continuous aggregate cannot hold a `count(DISTINCT …)` — incremental
+materialization needs a partial state that merges, and a distinct count's does
+not. So each aggregate holds one row per person per minute, and
+`encounter_minute` counts *those*, over data already collapsed by a factor of
+thousands.
+
+**Real-time aggregation is on (`materialized_only = false`).** The default
+since TimescaleDB 2.13 hides buckets the refresh job has not reached yet —
+which, at a one-minute bucket, means the current minute. That is the one
+minute a live demo is looking at.
+
+Nothing compresses during a demo, because nothing in a demo is seven days old.
+To watch it work:
+
+```sql
+SELECT compress_chunk(c) FROM show_chunks('face_observation') c;
+```
+
+`glasses db stats` then reports the chunk count and the before/after size.
+
+### Running the Postgres tests
+
+The default suite is numpy-only: no network, no Docker, no driver. The
+Postgres tests skip themselves unless `DATABASE_URL` is set, and when it is
+they run against the real thing in a schema of their own
+(`glasses_test_<pid>`), dropped afterwards:
+
+```sh
+DATABASE_URL=postgresql://postgres:glasses@127.0.0.1:55432/glasses \
+    .venv/bin/python -m pytest tests/test_pgvector_gallery.py
+```
+
+That is also how `PgVectorGallery` stopped being the untested half of the
+gallery. Running it found a real one: `hnsw.ef_search` defaults to 40, so a
+`LIMIT 64` — and 64 is `MatchConfig.search_limit`, the default every match
+uses — came back with 40 rows the moment the planner chose the vector index.
+No error, just a quietly truncated candidate list feeding the top-3
+aggregation. The gallery now raises `ef_search` to the requested limit and
+turns on pgvector 0.8's iterative scan, which is also what makes the
+`(model_name, model_version)` filter safe: an HNSW scan finds the nearest rows
+*before* the filter is applied, so a gallery part-way through a re-embedding
+could otherwise return nothing for the new model while thousands of its
+templates sat in the table.
 
 ## What is built
 
@@ -390,7 +525,9 @@ src/glasses/
   evaluation/
     verification.py  TAR at a fixed FAR, swept over gallery size
   db/
-    schema.sql     the full data model, not only the face tables
+    schema.sql     the full data model: profiles, and the stream hypertables
+    connect.py     the connection, and applying the schema one statement at a time
+    store.py       PgStore — the same operations as store.py, on Tiger
   voice/
     config.py      thresholds; min_duration_s is the one that matters
     audio.py       WAV/ffmpeg loading, resampling, level and SNR
@@ -399,6 +536,8 @@ src/glasses/
     embed.py       WeSpeaker CAM++, 512-d
     models.py      model downloads; no HF token, no torch
     pipeline.py    segment -> merge -> gate -> embed -> wearer -> match
+    transcribe.py  one Transcriber Protocol, per speaker segment
+    cartesia.py    Cartesia ink-whisper: the default, one POST per segment
   encounter/
     clock.py       one monotonic microsecond clock, shared by both sensors
     types.py       Interval, FaceObservation, SpeechObservation, Encounter
@@ -416,6 +555,7 @@ src/glasses/
   cli.py         glasses check / enroll / identify / watch / bench
   voice_cli.py   the voice subcommands
   search_cli.py  glasses ask, and the setup/seed/index commands
+  db_cli.py      glasses db init / stats
 ```
 
 Faces and voices share `identity/` entirely — the gallery, the top-3
@@ -520,6 +660,11 @@ will not notice without the chart.
   on a name.
 - `DiarizingSegmenter` runs and is wired up, but has not been checked against
   a recording with known speaker turns — only the single-speaker path has.
+- The Cartesia call has been made for real: `ink-whisper` returned a correct
+  transcript of a 10 s clip in 400 ms. That exercised `CartesiaTranscriber`
+  directly, not `glasses transcribe` end to end, and one recording is not a
+  WER measurement — the far-field case the PRD worries about is still
+  unmeasured.
 - ReDimNet is the voice equivalent of the AdaFace swap: least cross-domain
   degradation of the current crop, which is what far-field audio needs.
 - `PgVectorGallery` is written but untested — it needs a Postgres with
@@ -537,6 +682,17 @@ will not notice without the chart.
 - Elastic holds a copy, and the sync is manual. There is no trigger that
   indexes an encounter when it closes; `search-index` and `search-seed`
   are run by hand.
+- `PgStore` is tested but not yet wired into `enroll` / `identify` / `watch`:
+  those still use the file-backed store, deliberately, so that making Tiger
+  the system of record could not destabilise the one path that works today.
+  Pointing the CLI at `--url` is the next commit, not a rewrite.
+- The retention and compression *policies* exist and are scheduled; neither
+  has been observed firing, because nothing here is seven days old. The
+  manual `compress_chunk` path is tested, which proves the configuration is
+  usable rather than merely present.
+- The continuous aggregates bucket at one minute, which is right for a demo
+  and probably wrong for a year of wear. A second, coarser aggregate rolled
+  up from the first is the normal answer and is not written.
 - No anti-spoofing and no re-identification across clothing changes. Both are
   deliberately excluded from v1.
 
@@ -547,3 +703,9 @@ and a soft-delete column on every table holding biometric data, because the
 PRD puts the consent and deletion paths in M0 rather than retrofitting them.
 The deletion job that enforces retention is not written yet. Until it is, do
 not capture anyone.
+
+One thing leaves the machine, and it is worth knowing which: with
+`CARTESIA_API_KEY` set, each speech segment that passed the quality gate is
+uploaded to Cartesia for transcription. Nothing else is — not frames, not
+embeddings, not the gallery. `glasses transcribe --local`, or no key, keeps
+even that offline.

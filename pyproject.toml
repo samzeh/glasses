@@ -24,6 +24,13 @@ db = [
     "psycopg[binary]>=3.1",
     "pgvector>=0.2.5",
 ]
+# Cartesia STT, the default transcription path. The call itself needs no
+# client library -- it is one multipart POST, which urllib already does, and
+# the thing that reaches the network is the last place to want a dependency.
+# What this installs is everything else `glasses transcribe` needs: Cartesia
+# replaces Whisper only, so segmentation and speaker embedding still run
+# locally, which is [voice]. It is the whisper-sized download it saves.
+cartesia = ["glasses[voice]"]
 
 [project.scripts]
 glasses = "glasses.cli:main"

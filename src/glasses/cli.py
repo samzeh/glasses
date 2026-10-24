@@ -16,6 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .db_cli import register as register_db
+from . import env
 from .face import FacePipeline, PipelineConfig
 from .face.types import FrameResult, MatchStatus
 from .meet_cli import register as register_meet
@@ -569,11 +571,15 @@ def build_parser() -> argparse.ArgumentParser:
     register_voice(subparsers)
     register_meet(subparsers)
     register_search(subparsers)
+    register_db(subparsers)
 
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Before parsing: which recogniser a command picks depends on whether
+    # CARTESIA_API_KEY is visible, and the key usually lives in .env.
+    env.load()
     args = build_parser().parse_args(argv)
     return int(args.func(args))
 

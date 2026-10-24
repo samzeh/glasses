@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from glasses.identity.gallery import GalleryEntry, InMemoryGallery
+from glasses.identity.gallery import GalleryEntry, InMemoryGallery, PgVectorGallery
 from glasses.identity.types import Embedding
 
 from .fakes import unit
@@ -84,3 +84,11 @@ def test_a_zero_vector_is_refused_rather_than_silently_becoming_nan():
 
     with pytest.raises(ValueError, match="zero vector"):
         gallery.search(unit([1.0, 0.0, 0.0]))
+
+
+def test_a_pgvector_gallery_can_only_be_pointed_at_a_table_holding_embeddings():
+    """The table name is interpolated into the SQL rather than passed as a
+    parameter, because an identifier cannot be a parameter. The allowlist is
+    what makes that safe, so it is worth a test that needs no database."""
+    with pytest.raises(ValueError, match="unknown template table"):
+        PgVectorGallery(None, "person")
