@@ -4,51 +4,26 @@ AR glasses that recognize people and recall what you know about them.
 
 Spec: [Face Recognition Pipeline PRD](https://claude.ai/artifact/WMPP82KGZY6X5vqPi84Rhw).
 
-## Status
-
-Server-side face recognition only — the six stages of the PRD's hot loop, plus
-the schema and the measurement harness they depend on. Nothing else from the
-PRD is built yet: no firmware, no ingest, no trigger, no audio pipeline, no
-identity resolution, no surfacing.
-
-```
-src/glasses/
-  face/
-    config.py      thresholds, in one place, with CALIBRATE markers
-    types.py       the values passed between stages
-    detect.py      1. detect          SCRFD, + primary-subject choice
-    align.py       2. align           Umeyama similarity transform -> 112x112
-    quality.py     3. quality gate    score, size, blur, pose, luminance
-    embed.py       4. embed           ArcFace buffalo_l, 512-d
-    gallery.py     ---                in-memory and pgvector backends
-    match.py       5. match           cosine, mean of a person's top 3
-                   6. resolve         match / low confidence / unknown
-    models.py      loading ONNX nets, and digesting the weights
-    pipeline.py    the six, wired, with per-stage timings
-  evaluation/
-    verification.py  TAR at a fixed FAR, swept over gallery size
-  db/
-    schema.sql     the full data model, not only the face tables
-  store.py       file-backed people + templates, for M0
-  cli.py         glasses check / enroll / identify / watch / bench
-```
-
-Everything holding real logic runs on numpy alone. Only `detect.py` and
-`embed.py` need model weights, and both sit behind Protocols, so the suite runs
-without downloading anything.
-
-## Running it
+## Quick start
 
 ```sh
 uv venv
-uv pip install -e '.[face]'      # models; ~400 MB of wheels
-glasses check                    # downloads buffalo_l on first run, ~280 MB
+source .venv/bin/activate        # or prefix every command with .venv/bin/
+uv pip install -e '.[face]'      # ~400 MB of wheels
+
+glasses check                    # downloads the models on first run, ~280 MB
+glasses enroll --name "Sam" --consent "myself" --camera
+glasses watch
 ```
 
-`check` prints the dependency versions, the weights digests, and what is in
-the store. If it is clean, everything below works.
+That is the whole loop: teach it your face, then let it look at you.
 
-### The idea
+`check` prints dependency versions, weights digests, and what is in the store.
+If it is clean, everything below works. On macOS the first camera command
+triggers a permission prompt — if it never appears, enable your terminal under
+System Settings → Privacy & Security → Camera.
+
+## What you are doing
 
 It is a contacts list keyed by face. Two steps, and the first is the one
 people skip: **nothing can be recognised until it has been shown.**
@@ -58,8 +33,8 @@ people skip: **nothing can be recognised until it has been shown.**
 2. **Identify** — show it a face and ask who that is. It compares against
    everyone enrolled and answers with a name, "possibly a name", or unknown.
 
-Everything is local. Nothing is uploaded anywhere; the models run on your
-machine and the gallery is a directory you can delete.
+Everything is local. There is nothing to upload and no account: the models run
+on your machine and the gallery is a directory you can delete.
 
 ### Step 1 — enroll yourself, from the webcam
 
@@ -90,9 +65,15 @@ PRD's posture, not politeness: enroll only people who have actually agreed.
 glasses watch
 ```
 
-Live webcam with a box round each face and a name above it. Green means a
-confident match, amber means it saw a face but rejected the frame, grey means
-no face. The latency counter is top-left. `q` quits and prints p50/p95.
+Live webcam with a box round each face and a name above it:
+
+| box | meaning |
+|---|---|
+| green | matched someone enrolled |
+| amber | saw a face, but the frame failed the quality gate |
+| grey | no face found |
+
+The latency counter is top-left. `q` quits and prints p50/p95.
 
 Or over still images:
 
@@ -124,19 +105,26 @@ Normal, and worth reading rather than fighting. Check in this order:
 - Is `iod` under 80px? Then the face is too small for the embedder and the
   answer is to get closer or raise the resolution, not to lower the threshold.
 
-### The rest
+### Every command
 
-```sh
-glasses people                   # who is enrolled, and their consent record
-glasses forget "Sam"             # delete a person and all their data, at once
-glasses calibrate-pose frames/   # measure nose_frontal_fraction for your camera
-glasses bench frames/            # per-stage latency against the budget
-```
+| command | what it does |
+|---|---|
+| `glasses check` | dependency versions, weights digests, what is in the store |
+| `glasses enroll --name N --consent "…" --camera` | capture 6 views from the webcam |
+| `glasses enroll --name N --consent "…" photos/` | same, from image files |
+| `glasses identify photos/` | run the pipeline over images and print verdicts |
+| `glasses watch` | live webcam, boxes and names |
+| `glasses people` | who is enrolled, and their consent record |
+| `glasses forget "Sam"` | delete a person and all their data, in one operation |
+| `glasses calibrate-pose frames/` | measure `nose_frontal_fraction` for your camera |
+| `glasses bench frames/` | per-stage latency against the budget |
 
-The store is a directory (`glasses-store/` by default, `--store` to move it):
-an `.npz` of vectors beside a JSON index. Delete it to start over.
+`--store DIR` moves the gallery, `--help` works on any subcommand.
 
-As a library:
+The store is a directory (`glasses-store/` by default): an `.npz` of vectors
+beside a JSON index. Delete it to start over.
+
+### As a library
 
 ```python
 from glasses.face import ArcFaceEmbedder, FacePipeline, InMemoryGallery, ScrfdDetector
@@ -151,6 +139,39 @@ Tests need none of that — numpy alone:
 ```sh
 uv pip install -e . --group dev && .venv/bin/python -m pytest
 ```
+
+## What is built
+
+Server-side face recognition only — the six stages of the PRD's hot loop, plus
+the schema and the measurement harness they depend on. Nothing else from the
+PRD exists yet: no firmware, no ingest, no trigger, no audio pipeline, no
+identity resolution, no surfacing.
+
+```
+src/glasses/
+  face/
+    config.py      thresholds, in one place, with CALIBRATE markers
+    types.py       the values passed between stages
+    detect.py      1. detect          SCRFD, + primary-subject choice
+    align.py       2. align           Umeyama similarity transform -> 112x112
+    quality.py     3. quality gate    score, size, blur, pose, luminance
+    embed.py       4. embed           ArcFace buffalo_l, 512-d
+    gallery.py     ---                in-memory and pgvector backends
+    match.py       5. match           cosine, mean of a person's top 3
+                   6. resolve         match / low confidence / unknown
+    models.py      loading ONNX nets, and digesting the weights
+    pipeline.py    the six, wired, with per-stage timings
+  evaluation/
+    verification.py  TAR at a fixed FAR, swept over gallery size
+  db/
+    schema.sql     the full data model, not only the face tables
+  store.py       file-backed people + templates, for M0
+  cli.py         glasses check / enroll / identify / watch / bench
+```
+
+Everything holding real logic runs on numpy alone. Only `detect.py` and
+`embed.py` need model weights, and both sit behind Protocols, so the suite runs
+without downloading anything.
 
 ## Measured latency
 
