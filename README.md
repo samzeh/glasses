@@ -100,6 +100,9 @@ The ESP sends `single` to accept, `double` to dismiss, and `long` to stop
 events on the shared audio/touch serial protocol described below; this
 face-only command ignores audio frames. Firmware must handle any device sleep
 or power circuitry after a long tap.
+The current `arduino_smart_glasses.ino/test_arduino.ino` sketch still emits
+`CAM_ON`, `CAM_OFF`, and `SNAPSHOT` at 115200 baud. It needs a firmware update
+to emit the versioned JSON gestures before `--input-source esp` can work.
 
 Or over still images:
 

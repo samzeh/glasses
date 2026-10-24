@@ -67,6 +67,8 @@ def test_only_esp_long_tap_stops_meet(monkeypatch, capsys, gesture, expected_rea
         esp_port="port",
         headless=True,
         detect_every=5,
+        diarize=False,
+        save_audio=False,
     )
 
     assert meet_cli.cmd_meet(args) == 0
