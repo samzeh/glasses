@@ -86,21 +86,32 @@ uv pip install -e . --group dev && .venv/bin/python -m pytest
 
 ## Measured latency
 
-Apple Silicon CPU, 1280×886 frame, 6 faces detected, 2 through the gate:
+Apple Silicon, 1280×886 frame, 6 faces detected, 2 through the gate:
 
-| stage | p50 | budget |
-|---|---|---|
-| detect | 44 ms | |
-| align | 0.6 ms | |
-| quality gate | 1.1 ms | |
-| embed (2 faces) | 149 ms | |
-| match | 0.1 ms | 50 ms |
-| **total** | **192 ms** | **400 ms** |
+| stage | CPU | CoreML | budget |
+|---|---|---|---|
+| detect | 44 ms | 9.6 ms | |
+| align | 0.6 ms | 0.4 ms | |
+| quality gate | 1.1 ms | 0.7 ms | |
+| embed (2 faces) | 149 ms | 6.5 ms | |
+| match | 0.1 ms | 0.1 ms | 50 ms |
+| **total p50** | **192 ms** | **17.6 ms** | **400 ms** |
 
-Cold start adds ~500 ms of ONNX session setup, once per process. The budget is
-the PRD's server-side share; upload and render are not included. There is
-roughly 2× headroom, so speed is not currently the constraint — accuracy on
-real ESP frames is.
+The budget is the PRD's server-side share; upload and render are not included.
+
+**CoreML is the default where available, and it is free.** Same ArcFace
+ResNet-50 weights, so there is no accuracy trade — measured cosine between CPU
+and CoreML embeddings of the same crop is 0.9998, three orders of magnitude
+below the gap the 0.40 accept threshold cares about, and a gallery built on one
+provider matches probes from the other. It costs ~5 s of graph compilation at
+first inference, once per process. `GLASSES_PROVIDERS=CPUExecutionProvider`
+pins it back, which is what to do if two machines must agree bit for bit.
+
+At 20× headroom, speed is not the constraint. Accuracy on real ESP frames is.
+The smaller `buffalo_s` pack (MobileFaceNet, 13 MB) embeds in 10 ms on plain
+CPU if you ever need it, but it trades accuracy for a budget that is already
+met — the opposite of the direction this needs to move. The PRD's AdaFace swap
+is the one worth making, and it is about low-quality imagery, not speed.
 
 ## Three things that are load-bearing
 

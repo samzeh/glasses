@@ -12,7 +12,7 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 from .config import DetectConfig
-from .models import DETECTOR_FILE, load_net, pack_dir
+from .models import DETECTOR_FILE, default_providers, load_net, pack_dir
 from .types import BBox, Detection, Landmarks5
 
 
@@ -45,7 +45,7 @@ class ScrfdDetector:
         self.config = config or DetectConfig()
         self.model_pack = model_pack
         self._det_size = det_size
-        self._providers = providers or ["CPUExecutionProvider"]
+        self._providers = providers or default_providers()
         self._net = None
 
     def _ensure_loaded(self):  # type: ignore[no-untyped-def]

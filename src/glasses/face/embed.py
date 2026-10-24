@@ -17,7 +17,7 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-from .models import RECOGNITION_FILE, load_net, pack_dir, weights_digest
+from .models import RECOGNITION_FILE, default_providers, load_net, pack_dir, weights_digest
 from .types import AlignedFace, Embedding
 
 
@@ -61,7 +61,7 @@ class ArcFaceEmbedder:
         model_version: str | None = None,
     ) -> None:
         self._model_pack = model_pack
-        self._providers = providers or ["CPUExecutionProvider"]
+        self._providers = providers or default_providers()
         self._model_version = model_version
         self._model = None
 
