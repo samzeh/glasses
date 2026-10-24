@@ -1,9 +1,18 @@
 """Speech to text, per speaker segment.
 
-Whisper runs locally through sherpa-onnx: no API key, no network at demo
-time, no per-minute cost, and the same ONNX runtime everything else uses.
-``Transcriber`` is a Protocol, so a hosted API drops in behind it if the
-accuracy is ever worth the dependency.
+Two recognisers behind one Protocol, and the choice is made by whether a key
+is present:
+
+* **Cartesia ``ink-whisper``** when ``CARTESIA_API_KEY`` is set. The default,
+  and the better transcript. See ``cartesia.py``.
+* **Whisper locally** through sherpa-onnx otherwise, and whenever the hosted
+  call fails. No key, no network, no per-minute cost, and the same ONNX
+  runtime everything else uses.
+
+The local path stays a working fallback rather than becoming dead code. A key
+can expire overnight and a conference network can refuse to resolve anything;
+either way the honest outcome is a slightly worse transcript, not an empty
+one.
 
 **Each speaker segment is transcribed on its own**, rather than
 transcribing the whole recording and intersecting word timestamps against
@@ -31,6 +40,7 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 from ._deps import require_sherpa
+from .cartesia import CartesiaTranscriber, has_api_key
 from .config import SAMPLE_RATE
 from .models import DEFAULT_WHISPER, whisper_model
 from .types import SpeechSegment
@@ -121,6 +131,24 @@ class WhisperTranscriber:
         return str(stream.result.text).strip()
 
 
+def build_transcriber(
+    *,
+    local_model: str = DEFAULT_WHISPER,
+    language: str = "en",
+    local_only: bool = False,
+) -> Transcriber:
+    """Cartesia if a key is configured, the local Whisper otherwise.
+
+    One place makes this decision, so every caller agrees about which
+    recogniser is in use and the answer is never half-applied. Nothing is
+    loaded or requested here: both constructors are lazy, so choosing is
+    free.
+    """
+    if local_only or not has_api_key():
+        return WhisperTranscriber(local_model)
+    return CartesiaTranscriber(language=language)
+
+
 def transcribe_segments(
     transcriber: Transcriber,
     segments: list[SpeechSegment],
@@ -131,8 +159,8 @@ def transcribe_segments(
 
     ``labels`` parallels ``segments`` as ``(person_id, person_name,
     is_wearer)``. Segments whose transcript comes back empty are dropped:
-    Whisper returns "" or a lone period on audio with no intelligible
-    speech, and an empty utterance is not evidence of anything.
+    both recognisers return "" or a lone period on audio with no
+    intelligible speech, and an empty utterance is not evidence of anything.
     """
     resolved = labels or [(None, None, False)] * len(segments)
     if len(resolved) != len(segments):

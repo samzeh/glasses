@@ -44,6 +44,8 @@ def test_every_subcommand_parses():
         ("forget-voice", "Dan"),
         ("transcribe", "a.wav"),
         ("transcribe", "--mic", "--model", "tiny.en"),
+        ("transcribe", "--local", "a.wav"),
+        ("transcribe", "--language", "es", "a.wav"),
         ("voice-compare", "a.wav", "b.wav"),
         ("voice-eval", "recordings/"),
     ):
@@ -89,6 +91,16 @@ def test_enroll_voice_with_both_sources_is_refused(capsys):
     argv = bp().parse_args(["enroll-voice", "--name", "D", "--consent", "y", "--mic", "a.wav"])
     assert cmd_enroll_voice(argv) == 1
     assert "not both" in capsys.readouterr().err
+
+
+def test_transcribe_defaults_to_cartesia_and_english():
+    """The default path is the hosted one; --local and --model are the escape
+    hatches, not the normal case."""
+    argv = parse("transcribe", "a.wav")
+
+    assert argv.local is False
+    assert argv.language == "en"
+    assert argv.model == "base.en"
 
 
 def test_too_similar_rejects_a_near_duplicate_view():
