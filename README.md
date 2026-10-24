@@ -372,11 +372,11 @@ will not notice without the chart.
   on a name.
 - `DiarizingSegmenter` runs and is wired up, but has not been checked against
   a recording with known speaker turns — only the single-speaker path has.
-- The Cartesia call has not been made for real here: there is no API key in
-  this environment. The request is built against the published API shape and
-  covered by tests with the HTTP layer mocked, so the first run with a live
-  key is the first live run. The local path is what has been exercised on
-  real recordings.
+- The Cartesia call has been made for real: `ink-whisper` returned a correct
+  transcript of a 10 s clip in 400 ms. That exercised `CartesiaTranscriber`
+  directly, not `glasses transcribe` end to end, and one recording is not a
+  WER measurement — the far-field case the PRD worries about is still
+  unmeasured.
 - ReDimNet is the voice equivalent of the AdaFace swap: least cross-domain
   degradation of the current crop, which is what far-field audio needs.
 - `PgVectorGallery` is written but untested — it needs a Postgres with
