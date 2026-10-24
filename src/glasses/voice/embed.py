@@ -18,6 +18,7 @@ import numpy as np
 
 from ..identity.types import Embedding
 from ..identity.vectors import l2_normalize
+from ._deps import require_sherpa
 from .config import SAMPLE_RATE
 from .models import embedding_model, weights_digest
 from .types import SpeechSegment
@@ -81,7 +82,7 @@ class WeSpeakerEmbedder:
 
     def _ensure_loaded(self):  # type: ignore[no-untyped-def]
         if self._extractor is None:
-            import sherpa_onnx
+            sherpa_onnx = require_sherpa()
 
             config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
                 model=str(self._path()),

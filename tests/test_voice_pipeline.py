@@ -291,3 +291,31 @@ def test_the_meter_clamps_rather_than_overflowing():
 
     assert len(meter_bar(-120.0, width=8)) == 8
     assert len(meter_bar(6.0, width=8)) == 8
+
+
+# --- missing optional dependency ------------------------------------------
+
+
+def test_a_missing_audio_stack_names_the_command_that_fixes_it(monkeypatch):
+    """A bare ModuleNotFoundError eight frames into a pipeline tells you
+    nothing. `uv sync` prunes optional extras, so landing here without having
+    uninstalled anything is easy and the message has to say so."""
+    import builtins
+
+    from glasses.voice._deps import require_sherpa
+
+    real_import = builtins.__import__
+
+    def fail(name, *args, **kwargs):
+        if name == "sherpa_onnx":
+            raise ImportError("no sherpa_onnx")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail)
+
+    with pytest.raises(ModuleNotFoundError) as caught:
+        require_sherpa()
+
+    message = str(caught.value)
+    assert "uv pip install -e '.[face,voice]'" in message
+    assert "uv sync" in message

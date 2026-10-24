@@ -20,6 +20,7 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
+from ._deps import require_sherpa
 from .config import SAMPLE_RATE
 from .models import embedding_model, segmentation_model, vad_model
 from .types import SpeechSegment
@@ -59,7 +60,7 @@ class VadSegmenter:
 
     def _ensure_loaded(self):  # type: ignore[no-untyped-def]
         if self._vad is None:
-            import sherpa_onnx
+            sherpa_onnx = require_sherpa()
 
             if self._model_path is None:
                 self._model_path = vad_model()
@@ -139,7 +140,7 @@ class DiarizingSegmenter:
 
     def _ensure_loaded(self):  # type: ignore[no-untyped-def]
         if self._pipeline is None:
-            import sherpa_onnx
+            sherpa_onnx = require_sherpa()
 
             config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
                 segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(

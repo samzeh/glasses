@@ -8,13 +8,19 @@ Spec: [Face Recognition Pipeline PRD](https://claude.ai/artifact/WMPP82KGZY6X5vq
 
 ```sh
 uv venv
-source .venv/bin/activate        # or prefix every command with .venv/bin/
-uv pip install -e '.[face]'      # ~400 MB of wheels
+source .venv/bin/activate              # or prefix every command with .venv/bin/
+uv pip install -e '.[face,voice]'      # ~400 MB of wheels
 
-glasses check                    # downloads the models on first run, ~280 MB
+glasses check                          # downloads the models on first run, ~280 MB
 glasses enroll --name "Sam" --consent "myself" --camera
 glasses watch
 ```
+
+> **Do not run plain `uv sync` here.** It installs only the default
+> dependencies and prunes everything else, which removes every model stack in
+> this project — you will get `ModuleNotFoundError: No module named
+> 'sherpa_onnx'` or `cv2`. Use `uv sync --all-extras`, or the
+> `uv pip install -e '.[face,voice]'` above.
 
 That is the whole loop: teach it your face, then let it look at you.
 
@@ -113,8 +119,7 @@ API does. They transcribe sound; they do not track people across recordings.
 Pair it with whatever STT you like.
 
 ```sh
-uv pip install -e '.[voice]'   # sherpa-onnx + mic capture, ~40 MB
-glasses voice-check            # fetch the models, ~36 MB
+glasses voice-check            # fetch the voice models, ~36 MB
 
 # record yourself for 20 seconds — no audio files needed
 glasses enroll-voice --name "Sam" --consent "myself" --wearer --mic

@@ -14,6 +14,7 @@ from collections.abc import Callable
 
 import numpy as np
 
+from ._deps import INSTALL_HINT
 from .audio import rms_dbfs
 from .config import SAMPLE_RATE
 
@@ -24,10 +25,8 @@ SILENT_DBFS = -55.0
 def _require_sounddevice():  # type: ignore[no-untyped-def]
     try:
         import sounddevice
-    except ImportError:
-        sys.exit(
-            "Recording needs the audio stack. Install it with:\n    uv pip install -e '.[voice]'"
-        )
+    except ImportError as error:
+        raise ModuleNotFoundError(f"Recording needs sounddevice.\n\n{INSTALL_HINT}") from error
     return sounddevice
 
 
