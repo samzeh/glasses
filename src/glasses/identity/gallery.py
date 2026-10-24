@@ -1,4 +1,4 @@
-"""The gallery: enrolled face templates, searched by cosine similarity.
+"""The gallery: enrolled templates, searched by cosine similarity.
 
 Two implementations behind one Protocol.
 
@@ -21,8 +21,8 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-from .embed import l2_normalize
 from .types import Embedding, TemplateHit
+from .vectors import l2_normalize
 
 
 @runtime_checkable
@@ -102,9 +102,14 @@ class InMemoryGallery:
         ]
 
 
+#: Tables this gallery may be pointed at. An allowlist rather than an escaped
+#: identifier: the table name is interpolated into SQL, and the set of tables
+#: holding embeddings is closed and known at import time.
+TEMPLATE_TABLES = frozenset({"face_template", "voice_template"})
+
 _SEARCH_SQL = """
 SELECT id::text, person_id::text, 1 - (embedding <=> %(probe)s::vector) AS similarity
-FROM face_template
+FROM {table}
 WHERE model_name = %(model_name)s
   AND model_version = %(model_version)s
   AND deleted_at IS NULL
@@ -114,22 +119,31 @@ LIMIT %(limit)s
 
 
 class PgVectorGallery:
-    """pgvector-backed search against ``face_template``.
+    """pgvector-backed search against a template table.
 
     ``<=>`` is cosine distance, so similarity is ``1 - distance``. The ORDER BY
     is what lets the HNSW index serve the query; filtering in Python after the
     fact would not.
+
+    The same class serves faces and voices because the two tables differ only
+    in vector width, which pgvector carries in the column type.
     """
 
-    def __init__(self, connection) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, connection, table: str = "face_template") -> None:  # type: ignore[no-untyped-def]
+        if table not in TEMPLATE_TABLES:
+            raise ValueError(
+                f"unknown template table {table!r}; expected {sorted(TEMPLATE_TABLES)}"
+            )
         self._connection = connection
+        self._sql = _SEARCH_SQL.format(table=table)
+        self.table = table
 
     def search(self, probe: Embedding, *, limit: int = 64) -> list[TemplateHit]:
         vector = l2_normalize(probe.vector)
         literal = "[" + ",".join(repr(float(v)) for v in vector) + "]"
         with self._connection.cursor() as cursor:
             cursor.execute(
-                _SEARCH_SQL,
+                self._sql,
                 {
                     "probe": literal,
                     "model_name": probe.model_name,

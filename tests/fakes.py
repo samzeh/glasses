@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from glasses.face.types import AlignedFace, Detection, Embedding
+from glasses.face.types import AlignedFace, Detection
+from glasses.identity.types import Embedding
 
 
 class FakeDetector:

@@ -4,9 +4,9 @@ import numpy as np
 
 from glasses.face.config import DetectConfig, PipelineConfig, QualityConfig
 from glasses.face.detect import select_primary
-from glasses.face.gallery import InMemoryGallery
 from glasses.face.pipeline import FacePipeline
-from glasses.face.types import MatchStatus
+from glasses.identity.gallery import InMemoryGallery
+from glasses.identity.types import MatchStatus
 
 from .conftest import make_detection, make_textured_frame
 from .fakes import FakeDetector, FakeEmbedder, unit

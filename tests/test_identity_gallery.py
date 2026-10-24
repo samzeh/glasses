@@ -3,8 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from glasses.face.gallery import GalleryEntry, InMemoryGallery
-from glasses.face.types import Embedding
+from glasses.identity.gallery import GalleryEntry, InMemoryGallery
+from glasses.identity.types import Embedding
 
 from .fakes import unit
 

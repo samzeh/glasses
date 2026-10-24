@@ -18,13 +18,13 @@ import time
 
 import numpy as np
 
+from ..identity.gallery import Gallery
+from ..identity.match import match_embedding
 from . import align as align_mod
 from . import quality as quality_mod
 from .config import PipelineConfig
 from .detect import FaceDetector, select_primary
 from .embed import FaceEmbedder
-from .gallery import Gallery
-from .match import match_embedding
 from .types import AlignedFace, FaceResult, FrameResult, StageTimings
 
 

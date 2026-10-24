@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..identity.config import MatchConfig
+
 # Canonical ArcFace 5-point reference, in pixels, for a 112x112 crop. Order is
 # left eye, right eye, nose, left mouth corner, right mouth corner — "left" as
 # it appears in the image, not the subject's left.
@@ -62,27 +64,6 @@ class QualityConfig:
     #: How far that fraction travels over a quarter turn of pitch. Sets the
     #: scale of the pitch estimate. CALIBRATE.
     nose_pitch_span: float = 0.50
-
-
-@dataclass(frozen=True)
-class MatchConfig:
-    """Stage 5. Thresholds are cosine similarity between L2-normalized
-    embeddings, so they live in [-1, 1]."""
-
-    #: Starting point from the PRD. Calibrate against a false-accept target,
-    #: and re-check it at every gallery size — a threshold tuned at ten people
-    #: produces steady misidentifications at two hundred.
-    accept_threshold: float = 0.40
-    #: Matches this far below the accept threshold surface as "possibly X"
-    #: rather than as a name. A confident wrong name is actively harmful.
-    review_margin: float = 0.05
-    #: A person is scored by the mean of their top-k template similarities,
-    #: never by a centroid: a centroid built from one good frontal and one bad
-    #: profile is worse than either. k=3 per the PRD.
-    top_k_templates: int = 3
-    #: How many templates to pull from the gallery before grouping by person.
-    #: Must be comfortably larger than top_k_templates * expected candidates.
-    search_limit: int = 64
 
 
 @dataclass(frozen=True)

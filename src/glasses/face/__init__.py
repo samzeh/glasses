@@ -1,27 +1,37 @@
 """Server-side face recognition: detect, align, gate, embed, match, resolve."""
 
-from .config import DetectConfig, MatchConfig, PipelineConfig, QualityConfig
+from ..identity import (
+    Embedding,
+    Gallery,
+    GalleryEntry,
+    InMemoryGallery,
+    MatchConfig,
+    MatchResult,
+    MatchStatus,
+    PersonScore,
+    PgVectorGallery,
+    TemplateHit,
+    cosine_similarity,
+    l2_normalize,
+    match_embedding,
+    resolve,
+    score_persons,
+)
+from .config import DetectConfig, PipelineConfig, QualityConfig
 from .detect import FaceDetector, ScrfdDetector, select_primary
-from .embed import ArcFaceEmbedder, FaceEmbedder, cosine_similarity, l2_normalize
-from .gallery import Gallery, GalleryEntry, InMemoryGallery, PgVectorGallery
-from .match import match_embedding, resolve, score_persons
+from .embed import ArcFaceEmbedder, FaceEmbedder
 from .pipeline import FacePipeline
 from .quality import assess, head_pose, laplacian_variance
 from .types import (
     AlignedFace,
     BBox,
     Detection,
-    Embedding,
     FaceResult,
     FrameResult,
     HeadPose,
     Landmarks5,
-    MatchResult,
-    MatchStatus,
-    PersonScore,
     QualityReport,
     StageTimings,
-    TemplateHit,
 )
 
 __all__ = [

@@ -3,10 +3,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from glasses.face.config import MatchConfig
-from glasses.face.gallery import InMemoryGallery
-from glasses.face.match import match_embedding, resolve, score_persons
-from glasses.face.types import MatchStatus, PersonScore, TemplateHit
+from glasses.identity.config import MatchConfig
+from glasses.identity.gallery import InMemoryGallery
+from glasses.identity.match import match_embedding, resolve, score_persons
+from glasses.identity.types import MatchStatus, PersonScore, TemplateHit
 
 from .fakes import unit
 

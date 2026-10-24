@@ -3,10 +3,29 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Literal
 
 import numpy as np
+
+from ..identity.types import Embedding, MatchResult, MatchStatus, PersonScore, TemplateHit
+
+__all__ = [
+    "AlignedFace",
+    "BBox",
+    "Detection",
+    "Embedding",
+    "FaceResult",
+    "FrameResult",
+    "GateName",
+    "HeadPose",
+    "Landmarks5",
+    "MatchResult",
+    "MatchStatus",
+    "PersonScore",
+    "QualityReport",
+    "StageTimings",
+    "TemplateHit",
+]
 
 Point = tuple[float, float]
 
@@ -128,66 +147,6 @@ class QualityReport:
         return float(
             0.35 * sharpness + 0.30 * size + 0.25 * frontality + 0.10 * self.detector_score
         )
-
-
-@dataclass(frozen=True)
-class Embedding:
-    """Stage 4 output. ``model_name`` and ``model_version`` travel with every
-    vector; without them a model swap silently mixes incomparable vectors in
-    one index and recognition quietly collapses."""
-
-    vector: np.ndarray  # (dim,) float32, L2-normalized
-    model_name: str
-    model_version: str
-
-    @property
-    def dim(self) -> int:
-        return int(self.vector.shape[0])
-
-    def key(self) -> tuple[str, str]:
-        return (self.model_name, self.model_version)
-
-
-@dataclass(frozen=True)
-class TemplateHit:
-    """One gallery row returned by a vector search."""
-
-    template_id: str
-    person_id: str
-    similarity: float
-
-
-@dataclass(frozen=True)
-class PersonScore:
-    """A person's aggregated similarity to the probe."""
-
-    person_id: str
-    similarity: float
-    template_count: int
-
-
-class MatchStatus(StrEnum):
-    MATCH = "match"
-    #: Near the threshold. Surface as "possibly X" and let a tap confirm or
-    #: correct — which doubles as the cheapest labelled data you will ever get.
-    LOW_CONFIDENCE = "low_confidence"
-    #: Below the review band. Becomes an unknown-identity candidate and goes to
-    #: the clustering path.
-    UNKNOWN = "unknown"
-
-
-@dataclass(frozen=True)
-class MatchResult:
-    """Stage 5/6 output."""
-
-    status: MatchStatus
-    person_id: str | None
-    similarity: float
-    runners_up: tuple[PersonScore, ...]
-
-    @property
-    def is_identified(self) -> bool:
-        return self.status is MatchStatus.MATCH
 
 
 @dataclass(frozen=True)

@@ -17,8 +17,10 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
+from ..identity.types import Embedding
+from ..identity.vectors import cosine_similarity, l2_normalize
 from .models import RECOGNITION_FILE, default_providers, load_net, pack_dir, weights_digest
-from .types import AlignedFace, Embedding
+from .types import AlignedFace
 
 
 @runtime_checkable
@@ -33,16 +35,6 @@ class FaceEmbedder(Protocol):
     def dim(self) -> int: ...
 
     def embed_batch(self, faces: list[AlignedFace]) -> list[Embedding]: ...
-
-
-def l2_normalize(vector: np.ndarray) -> np.ndarray:
-    """Unit-length float32. Cosine similarity is then a dot product, which is
-    what both the in-memory matcher and pgvector assume."""
-    arr = np.asarray(vector, dtype=np.float32).ravel()
-    norm = float(np.linalg.norm(arr))
-    if norm == 0.0:
-        raise ValueError("cannot normalize a zero vector")
-    return arr / norm
 
 
 class ArcFaceEmbedder:
@@ -101,9 +93,4 @@ class ArcFaceEmbedder:
         ]
 
 
-def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """For already-normalized vectors this is a dot product; normalizing again
-    costs nothing and removes a class of silent bug."""
-    av = l2_normalize(a)
-    bv = l2_normalize(b)
-    return float(np.dot(av, bv))
+__all__ = ["ArcFaceEmbedder", "FaceEmbedder", "cosine_similarity", "l2_normalize"]

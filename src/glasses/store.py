@@ -25,8 +25,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .face.gallery import GalleryEntry, InMemoryGallery
-from .face.types import Embedding
+from .identity.gallery import GalleryEntry, InMemoryGallery
+from .identity.types import Embedding
 
 
 def _now() -> str:
