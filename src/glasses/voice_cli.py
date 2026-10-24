@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from .identity.vectors import cosine_similarity
+from .storage import open_store, store_label
 from .store import LocalStore
 from .voice import (
     CartesiaError,
@@ -102,9 +103,9 @@ def cmd_voice_check(args: argparse.Namespace) -> int:
         print("    Cartesia is the better transcript and the default when a")
         print(f"    key is present. export {API_KEY_ENV}=… to use it.")
 
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     wearer = store.wearer()
-    print(f"\nstore         {args.store}")
+    print(f"\nstore         {store_label(args.store)}")
     print(f"  voiceprints {store.template_count_by_kind(VOICE)}")
     print(f"  wearer      {wearer.display_name if wearer else 'NOT ENROLLED'}")
     if wearer is None:
@@ -131,7 +132,7 @@ def cmd_enroll_voice(args: argparse.Namespace) -> int:
         )
         return 1
 
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     pipeline = build_voice_pipeline(store, diarize=args.diarize)
 
     existing = store.find_by_name(args.name)
@@ -228,7 +229,7 @@ def _enroll_from(args, store, pipeline, recordings, person_id):  # type: ignore[
 
 
 def cmd_identify_voice(args: argparse.Namespace) -> int:
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     if store.template_count_by_kind(VOICE) == 0:
         print("No voiceprints enrolled — run enroll-voice first.", file=sys.stderr)
         return 1
@@ -293,7 +294,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
     attribution needs no timestamp alignment to be exact."""
     from .voice import WhisperTranscriber, build_transcriber, render
 
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     pipeline = build_voice_pipeline(store, diarize=args.diarize, num_speakers=args.speakers)
     transcriber = build_transcriber(
         local_model=args.model,
@@ -347,7 +348,7 @@ def cmd_voice_eval(args: argparse.Namespace) -> int:
         print(f"need at least 2 person folders under {root}", file=sys.stderr)
         return 1
 
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     pipeline = build_voice_pipeline(store)
 
     vectors, labels = [], []
@@ -390,7 +391,7 @@ def cmd_voice_eval(args: argparse.Namespace) -> int:
 def cmd_voice_compare(args: argparse.Namespace) -> int:
     """Pairwise similarity between recordings. The quickest way to see
     whether two voices are separable at all before tuning anything."""
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     pipeline = build_voice_pipeline(store)
 
     vectors: dict[str, np.ndarray] = {}
@@ -418,7 +419,7 @@ def cmd_forget_voice(args: argparse.Namespace) -> int:
     path. This is the narrower repair tool for when one channel was enrolled
     wrongly and re-recording it is the fix.
     """
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     person = store.find_by_name(args.who) or store.people.get(args.who)
     if person is None:
         print(f"no such person: {args.who}", file=sys.stderr)

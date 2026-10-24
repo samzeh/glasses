@@ -12,7 +12,7 @@ from .encounter.clock import Clock, seconds_to_us, us_to_seconds
 from .face import FacePipeline
 from .face.models import default_providers
 from .meet import AudioRecorder, Capture, FaceTracker, MouthReader, assign_speakers, save_crop
-from .store import LocalStore
+from .storage import open_store
 from .voice.audio import write_wav
 
 VOICE = "voice"
@@ -32,7 +32,7 @@ def cmd_meet(args: argparse.Namespace) -> int:
     from .face import ArcFaceEmbedder, ScrfdDetector
     from .voice import VadSegmenter, VoicePipeline, WeSpeakerEmbedder
 
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     clock = Clock.start()
     providers = default_providers()
 

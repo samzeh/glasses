@@ -39,9 +39,9 @@ people skip: **nothing can be recognised until it has been shown.**
 2. **Identify** — show it a face and ask who that is. It compares against
    everyone enrolled and answers with a name, "possibly a name", or unknown.
 
-Recognition is local. There is nothing to upload and no account: the models
-run on your machine and the gallery is a directory you can delete. The one
-exception is transcription, which is a hosted call by default — see
+Recognition models run on your machine. With `DATABASE_URL` configured,
+people and embeddings are stored and searched in TigerData. Without it, the
+gallery uses a local directory. Transcription is a hosted call by default — see
 [Voice](#voice-who-is-speaking), and `--local` if that is not what you want.
 
 ### Step 1 — enroll yourself, from the webcam
@@ -446,7 +446,59 @@ two. Hold them in separate systems and that join becomes application code
 reconciling two clocks — which is the one bug this whole design is arranged to
 avoid.
 
-### Start one
+### Connect to Tiger Cloud
+
+Use a Tiger Cloud development service with the TimescaleDB add-on. Copy its
+PostgreSQL connection URL from the connection panel into the local `.env`:
+
+```dotenv
+DATABASE_URL=postgresql://tsdbadmin:YOUR_PASSWORD@YOUR_HOST:YOUR_PORT/tsdb?sslmode=require
+```
+
+Keep `.env` local; it is ignored by git. The app reads it automatically, and
+an exported `DATABASE_URL` takes precedence. The Tiger MCP connection lets
+the assistant manage the database; the app needs this URL separately.
+
+```sh
+.venv/bin/python -m pip install -e '.[db]'
+.venv/bin/glasses db init
+.venv/bin/glasses db stats
+```
+
+`db init` applies the schema to a new database. For an existing database it
+applies the cloud enrollment upgrade without resetting saved data. Run it
+after updating this branch. On first setup it reports both observation hypertables and the
+two real-time continuous aggregates. Use `db stats` to verify the connection,
+row counts, and live per-minute view. The schema enables compression after
+7 days and raw observation retention of 90 days.
+
+Enrollment, recognition, voice, and recall indexing now use the TigerData
+gallery automatically when `DATABASE_URL` is set. A database connection
+failure stops the command; it never silently writes a local gallery.
+An explicit `--store path` selects a local gallery for offline work.
+
+To move an existing local gallery and captured files into TigerData:
+
+```sh
+.venv/bin/glasses db migrate-local
+.venv/bin/glasses db migrate-local --remove-local
+```
+
+The first command imports and verifies without deleting. The second verifies
+again and removes the migrated local files after the database commit. IDs,
+consent, timestamps, model versions, quality scores, and embeddings are
+preserved. Original gallery files and files under `data/` are archived
+byte-for-byte in `local_import_file`, including photos. Model weights and
+configuration stay on your machine. Migration stops on conflicting data.
+Use `--local-store path` and `--media-dir path` for other source directories.
+`glasses forget "Sam"` also deletes archived source files associated with that
+person. Shared source archives are removed in full; other people's canonical
+database records stay intact.
+
+Elasticsearch remains a derived index; automatic syncing from TigerData is
+not implemented. `search-index` and `search-seed` still run manually.
+
+### Start a local database
 
 ```sh
 docker run -d --name glasses-tiger -p 55432:5432 \
@@ -462,8 +514,8 @@ glasses db stats     # what is in there, and the live per-minute view
 
 `timescaledb-ha:pg17` is the image to use rather than plain `postgres`: it
 ships TimescaleDB, pgvector and pgvectorscale together, which is the whole
-claim being made here. `glasses db init` is idempotent — it says so and stops
-if the schema is already applied; `--reset` drops everything first.
+claim being made here. `glasses db init` can be rerun safely to apply cloud
+enrollment upgrades; `--reset` drops everything first.
 
 ### What the schema does with it
 
@@ -696,8 +748,8 @@ will not notice without the chart.
   unmeasured.
 - ReDimNet is the voice equivalent of the AdaFace swap: least cross-domain
   degradation of the current crop, which is what far-field audio needs.
-- `PgVectorGallery` is written but untested — it needs a Postgres with
-  pgvector to test against.
+- `PgVectorGallery` and cloud migration are covered by the database integration
+  tests, which require `DATABASE_URL` and run in an isolated schema.
 - **The whole Elastic path is unverified against a live cluster.** No
   request in `glasses.search` has ever left the process: the tests run
   against a fake transport, and the request shapes come from Elastic's
@@ -711,10 +763,6 @@ will not notice without the chart.
 - Elastic holds a copy, and the sync is manual. There is no trigger that
   indexes an encounter when it closes; `search-index` and `search-seed`
   are run by hand.
-- `PgStore` is tested but not yet wired into `enroll` / `identify` / `watch`:
-  those still use the file-backed store, deliberately, so that making Tiger
-  the system of record could not destabilise the one path that works today.
-  Pointing the CLI at `--url` is the next commit, not a rewrite.
 - The retention and compression *policies* exist and are scheduled; neither
   has been observed firing, because nothing here is seven days old. The
   manual `compress_chunk` path is tested, which proves the configuration is

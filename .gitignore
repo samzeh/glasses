@@ -7,6 +7,7 @@ __pycache__/
 .mypy_cache/
 .env
 .DS_Store
+.codex
 
 # Captured media and model weights never belong in git. Frames and audio of
 # other people are the highest-risk data in the system (see PRD, Privacy).

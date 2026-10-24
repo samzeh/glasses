@@ -227,13 +227,13 @@ def cmd_search_index(args: argparse.Namespace) -> int:
     me?"; claiming to index facts we do not have would be worse than the
     gap.
     """
-    from .store import LocalStore
+    from .storage import open_store
     from .voice import WhisperTranscriber, transcribe_segments
     from .voice.audio import load_audio
     from .voice_cli import build_voice_pipeline, expand_audio
 
     config = _config(args)
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     pipeline = build_voice_pipeline(store, diarize=args.diarize, num_speakers=args.speakers)
     transcriber = WhisperTranscriber(args.model)
     indexer = _indexer(config, semantic=args.semantic)

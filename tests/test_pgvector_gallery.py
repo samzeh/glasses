@@ -513,3 +513,369 @@ def test_chunks_compress_and_stay_queryable(store, clock):
     )
     assert len(during) == 3
     assert store.minutes(encounter.id)[0]["face_observations"] == 5
+
+
+def test_cloud_cli_enrollment_persists_metadata_and_multiple_wearer_vectors(store):
+    from glasses.db.cli_store import PgCliStore
+
+    cli = PgCliStore(store.connection)
+    vectors = [embedding(direction(0)), embedding(direction(1))]
+    person = cli.enroll(
+        "Cloud Wearer",
+        vectors,
+        kind="voice",
+        is_wearer=True,
+        consent_note="agreed",
+        source="microphone",
+        quality_scores=[0.8, 0.9],
+    )
+    assert cli.people[person].consent_note == "agreed"
+    assert cli.template_count(person) == 2
+    assert cli.template_count_by_kind("voice") == 2
+    assert cli.wearer().id == person
+    assert len(cli.wearer_embeddings()) == 2
+    assert cli.models() == {MODEL}
+    assert {t.source for t in cli.templates} == {"microphone"}
+    assert cli.gallery("voice").search(vectors[0]) == []
+    with pytest.raises(ValueError, match="different wearer"):
+        cli.enroll("Other", vectors, kind="voice", is_wearer=True, consent_note="agreed")
+    assert len(cli.people) == 1
+    cli.save()
+    assert cli.forget(person) == 2
+    assert len(cli) == 0
+
+
+def test_local_migration_verifies_and_removes_only_imported_files(store, tmp_path):
+    from glasses.db.cli_store import PgCliStore
+    from glasses.db.migrate_local import migrate_local
+    from glasses.store import LocalStore
+
+    gallery = tmp_path / "gallery"
+    local = LocalStore(gallery)
+    person = local.enroll(
+        "Imported",
+        [embedding(direction(2))],
+        consent_note="original consent",
+        source="original.jpg",
+        quality_scores=[0.85],
+    )
+    local.save()
+    media = tmp_path / "media"
+    media.mkdir()
+    photo = media / "original.jpg"
+    photo.write_bytes(b"photo fixture")
+    untouched = tmp_path / "keep.txt"
+    untouched.write_text("not user data")
+    expected = {str(p.resolve()): p.read_bytes() for p in [photo, *gallery.iterdir()]}
+    result = migrate_local(store.connection, gallery, media)
+    assert result == {"people": 1, "templates": 1, "files": 3}
+    assert photo.exists()
+    cli = PgCliStore(store.connection)
+    assert cli.people[str(uuid.UUID(person))].consent_note == "original consent"
+    assert cli.gallery().search(embedding(direction(2)))[0].person_id == str(uuid.UUID(person))
+    assert cli.templates[0].source == "original.jpg"
+    # Repeat verifies existing rows rather than duplicating them, then cleans up.
+    assert migrate_local(store.connection, gallery, media, remove_local=True) == result
+    assert not gallery.exists()
+    assert not media.exists()
+    assert untouched.read_text() == "not user data"
+    for path, content in expected.items():
+        restored = store.connection.execute(
+            "SELECT content FROM local_import_file WHERE source_path=%s", (path,)
+        ).fetchone()[0]
+        assert bytes(restored) == content
+
+
+def test_local_migration_collision_keeps_local_data(store, tmp_path):
+    from glasses.db.migrate_local import migrate_local
+    from glasses.store import LocalStore
+
+    local = LocalStore(tmp_path)
+    person = local.enroll("Original", [embedding(direction(0))], consent_note="agreed")
+    local.save()
+    store.connection.execute(
+        "INSERT INTO person (id, display_name) VALUES (%s, 'Collision')", (str(uuid.UUID(person)),)
+    )
+    with pytest.raises(ValueError, match="collision"):
+        migrate_local(store.connection, tmp_path, remove_local=True)
+    assert (tmp_path / LocalStore.INDEX).is_file()
+    assert (tmp_path / LocalStore.VECTORS).is_file()
+
+
+def _local_gallery(path, *, kind="face", is_wearer=False):
+    from glasses.store import LocalStore
+
+    local = LocalStore(path)
+    person = local.enroll(
+        "Migration fixture",
+        [embedding(direction(0))],
+        consent_note="agreed",
+        source="fixture",
+        kind=kind,
+        is_wearer=is_wearer,
+    )
+    local.save()
+    return local, str(uuid.UUID(person))
+
+
+def test_existing_database_upgrade_preserves_enrollment_and_is_repeatable(store):
+    from glasses.db.cli_store import PgCliStore
+    from glasses.db.connect import apply_cloud_migration
+
+    person = store.enroll("Preserved", [embedding(direction(0))], consent_note="agreed")
+    # Reproduce the previous schema's columns and single-vector wearer index.
+    store.connection.execute("ALTER TABLE face_template DROP COLUMN source")
+    store.connection.execute(
+        "ALTER TABLE voice_template DROP COLUMN source, DROP COLUMN quality_score"
+    )
+    store.connection.execute(
+        "CREATE UNIQUE INDEX voice_template_one_wearer_idx "
+        "ON voice_template (is_wearer) WHERE is_wearer AND deleted_at IS NULL"
+    )
+    store.connection.execute("ALTER TABLE local_import_file DROP COLUMN person_ids")
+    apply_cloud_migration(store.connection)
+    apply_cloud_migration(store.connection)
+    cli = PgCliStore(store.connection)
+    assert cli.people[person].display_name == "Preserved"
+    assert cli.gallery().search(embedding(direction(0)))[0].person_id == person
+    assert cli.templates[0].source == ""
+    cli.enroll(
+        "Wearer",
+        [embedding(direction(1)), embedding(direction(2))],
+        kind="voice",
+        is_wearer=True,
+        consent_note="agreed",
+    )
+    assert cli.template_count_by_kind("voice") == 2
+
+
+def test_forgetting_imported_person_erases_original_archives(store, tmp_path):
+    from glasses.db.cli_store import PgCliStore
+    from glasses.db.connect import apply_cloud_migration
+    from glasses.db.migrate_local import migrate_local
+
+    local, person = _local_gallery(tmp_path)
+    other = local.enroll("Other", [embedding(direction(1))], consent_note="agreed")
+    local.save()
+    migrate_local(store.connection, tmp_path)
+    paths = [str(p.resolve()) for p in tmp_path.iterdir()]
+    # Emulate archives written before they were linked to their people.
+    store.connection.execute(
+        "UPDATE local_import_file SET person_ids='{}' WHERE source_path=ANY(%s)", (paths,)
+    )
+    apply_cloud_migration(store.connection)
+    for path in paths:
+        owners = store.connection.execute(
+            "SELECT person_ids FROM local_import_file WHERE source_path=%s", (path,)
+        ).fetchone()[0]
+        assert {str(value) for value in owners} == {person, str(uuid.UUID(other))}
+    cli = PgCliStore(store.connection)
+    cli.forget(person)
+    assert (
+        store.connection.execute(
+            "SELECT count(*) FROM local_import_file WHERE source_path=ANY(%s)", (paths,)
+        ).fetchone()[0]
+        == 0
+    )
+    assert str(uuid.UUID(other)) in cli.people
+    assert cli.template_count(str(uuid.UUID(other))) == 1
+
+
+@pytest.mark.parametrize("conflict", ["template", "archive"])
+def test_migration_conflict_preserves_all_local_files(store, tmp_path, conflict):
+    from glasses.db.migrate_local import migrate_local
+
+    local, _ = _local_gallery(tmp_path)
+    migrate_local(store.connection, tmp_path)
+    if conflict == "template":
+        store.connection.execute(
+            "UPDATE face_template SET model_version='conflict' WHERE id=%s",
+            (str(uuid.UUID(local.templates[0].id)),),
+        )
+    else:
+        store.connection.execute(
+            "UPDATE local_import_file SET content=%s WHERE source_path=%s",
+            (b"corrupt archive", str((tmp_path / "index.json").resolve())),
+        )
+    with pytest.raises(ValueError, match="verification failed"):
+        migrate_local(store.connection, tmp_path, remove_local=True)
+    assert (tmp_path / "index.json").is_file()
+    assert (tmp_path / "templates.npz").is_file()
+
+
+def test_migration_rolls_back_if_archive_write_fails(store, tmp_path):
+    from types import SimpleNamespace
+
+    from glasses.db.migrate_local import migrate_local
+
+    _, person = _local_gallery(tmp_path)
+
+    def failing_execute(query, *args):
+        if query.startswith("INSERT INTO local_import_file"):
+            raise RuntimeError("simulated archive failure")
+        return store.connection.execute(query, *args)
+
+    connection = SimpleNamespace(
+        autocommit=True,
+        info=store.connection.info,
+        transaction=store.connection.transaction,
+        execute=failing_execute,
+    )
+    with pytest.raises(RuntimeError, match="simulated archive failure"):
+        migrate_local(connection, tmp_path, remove_local=True)
+    assert (
+        store.connection.execute("SELECT count(*) FROM person WHERE id=%s", (person,)).fetchone()[0]
+        == 0
+    )
+    assert (
+        store.connection.execute(
+            "SELECT count(*) FROM face_template WHERE person_id=%s", (person,)
+        ).fetchone()[0]
+        == 0
+    )
+    assert (tmp_path / "index.json").exists()
+    assert (tmp_path / "templates.npz").exists()
+
+
+def test_migration_preserves_local_files_if_they_change_before_cleanup(
+    store, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from glasses.db.migrate_local import migrate_local
+
+    _, person = _local_gallery(tmp_path / "gallery")
+    media = tmp_path / "media"
+    media.mkdir()
+    photo = media / "photo.jpg"
+    photo.write_bytes(b"original")
+    original_read = Path.read_bytes
+    reads = 0
+
+    def changed_read(path):
+        nonlocal reads
+        if path == photo.resolve():
+            reads += 1
+            if reads == 2:
+                path.write_bytes(b"changed during migration")
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", changed_read)
+    with pytest.raises(ValueError, match="changed during migration"):
+        migrate_local(store.connection, tmp_path / "gallery", media, remove_local=True)
+    assert photo.read_bytes() == b"changed during migration"
+    assert (tmp_path / "gallery" / "index.json").exists()
+    assert (tmp_path / "gallery" / "templates.npz").exists()
+    assert (
+        store.connection.execute("SELECT count(*) FROM person WHERE id=%s", (person,)).fetchone()[0]
+        == 1
+    )
+
+
+def test_migration_commits_before_cleanup_and_can_retry_failed_unlink(store, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from glasses.db.migrate_local import migrate_local
+
+    _, person = _local_gallery(tmp_path)
+    unlink = Path.unlink
+
+    def failure(path, *args, **kwargs):
+        if path.name == "index.json":
+            raise OSError("simulated disk failure")
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failure)
+    with pytest.raises(OSError, match="disk failure"):
+        migrate_local(store.connection, tmp_path, remove_local=True)
+    assert (
+        store.connection.execute("SELECT count(*) FROM person WHERE id=%s", (person,)).fetchone()[0]
+        == 1
+    )
+    monkeypatch.setattr(Path, "unlink", unlink)
+    assert migrate_local(store.connection, tmp_path, remove_local=True)["templates"] == 1
+    assert not tmp_path.exists()
+
+
+@pytest.mark.parametrize("invalid", ["missing", "width", "nan", "zero"])
+def test_migration_rejects_broken_embeddings_before_writing(store, tmp_path, invalid):
+    from glasses.db.migrate_local import migrate_local
+
+    local, person = _local_gallery(tmp_path)
+    vector_id = local.templates[0].id
+    if invalid == "missing":
+        del local._vectors[vector_id]
+    else:
+        local._vectors[vector_id] = {
+            "width": np.ones(3),
+            "nan": np.full(512, np.nan),
+            "zero": np.zeros(512),
+        }[invalid]
+    local.save()
+    with pytest.raises(ValueError):
+        migrate_local(store.connection, tmp_path, remove_local=True)
+    assert (
+        store.connection.execute("SELECT count(*) FROM person WHERE id=%s", (person,)).fetchone()[0]
+        == 0
+    )
+    assert (tmp_path / "index.json").exists()
+
+
+def test_migration_preserves_voice_metadata_and_rejects_a_second_wearer(store, tmp_path):
+    from glasses.db.migrate_local import migrate_local
+
+    _, person = _local_gallery(tmp_path, kind="voice", is_wearer=True)
+    existing = store.enroll(
+        "Existing wearer", [embedding(direction(1))], kind="voice", is_wearer=True
+    )
+    with pytest.raises(ValueError, match="different wearer"):
+        migrate_local(store.connection, tmp_path, remove_local=True)
+    assert (tmp_path / "index.json").exists()
+    store.forget(existing)
+    migrate_local(store.connection, tmp_path)
+    row = store.connection.execute(
+        "SELECT is_wearer, source, quality_score FROM voice_template WHERE person_id=%s", (person,)
+    ).fetchone()
+    assert row == (True, "fixture", 0.0)
+
+
+def test_migration_rejects_uncommitted_connection_and_symlink_roots(store, tmp_path):
+    from glasses.db.migrate_local import migrate_local
+
+    gallery = tmp_path / "gallery"
+    _local_gallery(gallery)
+    with store.connection.transaction(), pytest.raises(ValueError, match="idle autocommit"):
+        migrate_local(store.connection, gallery, remove_local=True)
+    link = tmp_path / "linked-gallery"
+    link.symlink_to(gallery, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlinked"):
+        migrate_local(store.connection, link, remove_local=True)
+    assert (gallery / "index.json").is_file()
+
+
+def test_cli_enrolls_and_forgets_in_cloud_without_creating_local_gallery(
+    store, tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from glasses import cli
+    from glasses.db.cli_store import PgCliStore
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "configured")
+    cloud = PgCliStore(store.connection)
+    monkeypatch.setattr(PgCliStore, "open", lambda: cloud)
+    face = SimpleNamespace(embedding=embedding(direction(4)), quality=SimpleNamespace(score=0.9))
+    result = SimpleNamespace(primary=face, faces=(face,))
+    monkeypatch.setattr(
+        cli, "build_pipeline", lambda _: SimpleNamespace(process_frame=lambda _: result)
+    )
+    monkeypatch.setattr(cli, "read_frames", lambda paths: [(paths[0], np.zeros((1, 1, 3)))])
+    assert cli.main(["enroll", "--name", "Cloud CLI", "--consent", "agreed", "fixture.jpg"]) == 0
+    person = cloud.find_by_name("cloud cli")
+    assert person is not None
+    assert cloud.gallery().search(face.embedding)[0].person_id == person.id
+    assert not (tmp_path / "glasses-store").exists()
+    assert cli.main(["forget", "Cloud CLI"]) == 0
+    assert cloud.find_by_name("Cloud CLI") is None
+    assert not (tmp_path / "glasses-store").exists()
