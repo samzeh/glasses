@@ -88,6 +88,19 @@ enroll anyone or change the gallery. `q` quits and prints p50/p95. These laptop
 keys are the default controls. With `--headless`, type a key followed by Return
 in the terminal; Ctrl-C also stops the command.
 
+For the ESP touch sensor, select the serial port explicitly (install the
+`device` extra first):
+
+```sh
+glasses watch --input-source esp --esp-port /dev/tty.usbmodem1234
+```
+
+The ESP sends `single` to accept, `double` to dismiss, and `long` to stop
+`watch`. In ESP mode, laptop keys do not make decisions. `watch` reads touch
+events on the shared audio/touch serial protocol described below; this
+face-only command ignores audio frames. Firmware must handle any device sleep
+or power circuitry after a long tap.
+
 Or over still images:
 
 ```sh
