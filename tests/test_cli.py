@@ -6,7 +6,15 @@ from __future__ import annotations
 
 import pytest
 
-from glasses.cli import build_parser, cmd_forget, cmd_people, expand_images, main
+from glasses.cli import (
+    build_parser,
+    cmd_enroll,
+    cmd_forget,
+    cmd_people,
+    expand_images,
+    main,
+    too_similar,
+)
 from glasses.store import LocalStore
 
 from .fakes import unit
@@ -36,6 +44,45 @@ def test_enroll_requires_a_consent_note():
     """Forgetting the flag has to be an error, not a default."""
     with pytest.raises(SystemExit):
         parse("enroll", "--name", "Dan", "a.jpg")
+
+
+def test_enroll_defaults_to_camera_zero():
+    assert parse("enroll", "--name", "D", "--consent", "y", "--camera").camera == 0
+    assert parse("enroll", "--name", "D", "--consent", "y", "--camera", "2").camera == 2
+
+
+def test_enroll_without_a_source_is_refused(capsys):
+    """Neither photos nor a camera means there is nothing to enroll from."""
+    assert cmd_enroll(parse("enroll", "--name", "D", "--consent", "y")) == 1
+    assert "either --camera" in capsys.readouterr().err
+
+
+def test_enroll_with_both_sources_is_refused(capsys):
+    argv = parse("enroll", "--name", "D", "--consent", "y", "--camera", "0", "a.jpg")
+    assert cmd_enroll(argv) == 1
+    assert "not both" in capsys.readouterr().err
+
+
+def test_too_similar_rejects_a_near_duplicate_view():
+    """Ten copies of one angle is worse than three different ones — the top-3
+    matcher averages near-duplicates into the number one template would give."""
+    first = unit([1.0, 0.0, 0.0])
+    near = unit([0.999, 0.01, 0.0])
+    different = unit([0.6, 0.8, 0.0])
+
+    assert too_similar(near, [first], 0.97)
+    assert not too_similar(different, [first], 0.97)
+
+
+def test_too_similar_checks_against_every_accepted_view():
+    accepted = [unit([1.0, 0.0, 0.0]), unit([0.0, 1.0, 0.0])]
+
+    assert too_similar(unit([0.01, 0.999, 0.0]), accepted, 0.97)
+    assert not too_similar(unit([0.0, 0.0, 1.0]), accepted, 0.97)
+
+
+def test_nothing_is_too_similar_to_an_empty_set():
+    assert not too_similar(unit([1.0, 0.0]), [], 0.97)
 
 
 def test_a_command_is_required():

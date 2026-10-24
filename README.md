@@ -48,23 +48,91 @@ glasses check                    # downloads buffalo_l on first run, ~280 MB
 `check` prints the dependency versions, the weights digests, and what is in
 the store. If it is clean, everything below works.
 
+### The idea
+
+It is a contacts list keyed by face. Two steps, and the first is the one
+people skip: **nothing can be recognised until it has been shown.**
+
+1. **Enroll** — show it a face and give it a name. It stores a few 512-number
+   vectors per person. Not the photos: the images are read and dropped.
+2. **Identify** — show it a face and ask who that is. It compares against
+   everyone enrolled and answers with a name, "possibly a name", or unknown.
+
+Everything is local. Nothing is uploaded anywhere; the models run on your
+machine and the gallery is a directory you can delete.
+
+### Step 1 — enroll yourself, from the webcam
+
+No photo files needed:
+
 ```sh
-# enroll yourself from a handful of photos
-glasses enroll --name "Sam" --consent "me, 2026-10-23" photos/sam/
+glasses enroll --name "Sam" --consent "myself" --camera
+```
 
-# run the pipeline over images
-glasses identify photos/test/
+A window opens. Look at the camera, then slowly turn your head left, right, up
+and down. It captures 6 *different* views and stops. Near-identical frames are
+skipped deliberately — six copies of one angle is worse than three genuinely
+different ones, because the matcher averages duplicates into the same number a
+single template would have given.
 
-# live from the webcam — the closest thing to wearing the device
+From photos instead, for someone who isn't in front of you:
+
+```sh
+glasses enroll --name "Dan Kim" --consent "asked him on 2026-10-23" photos/dan/
+```
+
+`--consent` is required and the note is stored with the person. That is the
+PRD's posture, not politeness: enroll only people who have actually agreed.
+
+### Step 2 — see if it knows you
+
+```sh
 glasses watch
+```
 
+Live webcam with a box round each face and a name above it. Green means a
+confident match, amber means it saw a face but rejected the frame, grey means
+no face. The latency counter is top-left. `q` quits and prints p50/p95.
+
+Or over still images:
+
+```sh
+glasses identify some-photos/
+```
+
+```
+sam-at-desk.jpg
+  primary  Sam (0.612)  iod=138px blur=492 yaw=+5 pitch=-11
+  18 ms
+stranger.jpg
+  primary  unknown best=0.104  iod=132px blur=320 yaw=-16 pitch=-10
+  17 ms
+```
+
+The number after the name is cosine similarity. Above 0.40 is a match, 0.35 to
+0.40 is "possibly", below is unknown. `iod` is the face width in pixels, and
+it is the figure that decides whether any of this can work on real hardware.
+
+### If it says "unknown" when it should know you
+
+Normal, and worth reading rather than fighting. Check in this order:
+
+- `glasses people` — are you actually enrolled, with more than one template?
+- Is the frame being rejected before it is ever matched? `identify` prints the
+  failing gate terms. `pitch` dominating means the pose constant needs
+  calibrating, not that your face is wrong.
+- Is `iod` under 80px? Then the face is too small for the embedder and the
+  answer is to get closer or raise the resolution, not to lower the threshold.
+
+### The rest
+
+```sh
 glasses people                   # who is enrolled, and their consent record
-glasses forget "Sam"             # delete a person and all their data
-glasses calibrate-pose frames/   # measure nose_frontal_fraction
+glasses forget "Sam"             # delete a person and all their data, at once
+glasses calibrate-pose frames/   # measure nose_frontal_fraction for your camera
 glasses bench frames/            # per-stage latency against the budget
 ```
 
-`--consent` is required on `enroll`, and the note is stored with the person.
 The store is a directory (`glasses-store/` by default, `--store` to move it):
 an `.npz` of vectors beside a JSON index. Delete it to start over.
 

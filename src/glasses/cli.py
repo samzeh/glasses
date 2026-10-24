@@ -1,7 +1,7 @@
 """Command line entry point: ``glasses <command>``.
 
-This is the M0 harness — enough to enroll yourself from a few photos, point a
-webcam at your face, and see what the pipeline decides. It is not the product:
+This is the M0 harness — enough to enroll yourself from the webcam or a few
+photos, then see who the pipeline thinks it is looking at. It is not the product:
 there is no ESP, no encounter, no audio. It exists so the thresholds can be
 calibrated against real frames before any of that is built.
 """
@@ -129,7 +129,105 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def too_similar(candidate, accepted: list, limit: float) -> bool:
+    """Whether a candidate template duplicates one already accepted.
+
+    Consecutive webcam frames are nearly identical, so capturing "ten frames"
+    naively yields one view ten times. Ten copies of one angle is strictly
+    worse than three genuinely different ones: the top-3 matcher averages
+    near-duplicates into the same number it would have got from a single
+    template, and the gallery grows for nothing.
+    """
+    return any(float(candidate.vector @ existing.vector) > limit for existing in accepted)
+
+
+def capture_enrollment(args: argparse.Namespace, pipeline) -> tuple[list, list, list]:  # type: ignore[no-untyped-def]
+    """Collect varied templates from a live camera, with feedback."""
+    cv2 = _require_cv2()
+    capture = cv2.VideoCapture(args.camera)
+    if not capture.isOpened():
+        print(
+            f"Could not open camera {args.camera}.\n"
+            "On macOS the terminal needs camera access: System Settings > "
+            "Privacy & Security > Camera.",
+            file=sys.stderr,
+        )
+        return [], [], []
+
+    print(
+        f"Capturing {args.frames} views of {args.name}.\n"
+        "Look at the camera, then slowly turn your head left, right, up and "
+        "down. Near-identical frames are skipped on purpose.\n"
+        "q to stop early.\n"
+    )
+
+    embeddings, scores, sources = [], [], []
+    deadline = time.time() + args.seconds
+    try:
+        while len(embeddings) < args.frames and time.time() < deadline:
+            ok, frame = capture.read()
+            if not ok:
+                break
+
+            face = pipeline.process_frame(frame).primary
+            if face is None:
+                status, colour = "no face", (90, 90, 90)
+            elif face.embedding is None:
+                status, colour = ", ".join(face.quality.failures), (0, 170, 220)
+            elif too_similar(face.embedding, embeddings, args.max_similarity):
+                status, colour = "too similar — move your head", (0, 170, 220)
+            else:
+                embeddings.append(face.embedding)
+                scores.append(face.quality.score)
+                sources.append(f"camera:{len(embeddings)}")
+                status, colour = f"captured {len(embeddings)}/{args.frames}", (0, 200, 0)
+                print(
+                    f"  captured {len(embeddings)}/{args.frames}  quality={face.quality.score:.2f}"
+                )
+
+            if not args.headless:
+                if face is not None:
+                    box = face.detection.bbox
+                    cv2.rectangle(
+                        frame,
+                        (int(box.x1), int(box.y1)),
+                        (int(box.x2), int(box.y2)),
+                        colour,
+                        2,
+                    )
+                cv2.putText(
+                    frame,
+                    f"{len(embeddings)}/{args.frames}  {status}",
+                    (12, 28),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    colour,
+                    2,
+                )
+                cv2.imshow("enroll", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        capture.release()
+        if not args.headless:
+            cv2.destroyAllWindows()
+
+    if len(embeddings) < args.frames:
+        print(f"\nstopped with {len(embeddings)} of {args.frames}")
+    return embeddings, scores, sources
+
+
 def cmd_enroll(args: argparse.Namespace) -> int:
+    if bool(args.camera is not None) == bool(args.images):
+        print(
+            "Give either --camera (enroll from the webcam) or image paths, "
+            "not both and not neither.",
+            file=sys.stderr,
+        )
+        return 1
+
     store = LocalStore.load(args.store)
     pipeline = build_pipeline(store)
 
@@ -140,24 +238,32 @@ def cmd_enroll(args: argparse.Namespace) -> int:
             f"adding to existing person {args.name} ({store.template_count(existing.id)} templates)"
         )
 
-    embeddings, scores, sources, rejected = [], [], [], 0
-    for path, frame in read_frames(expand_images(args.images)):
-        result = pipeline.process_frame(frame)
-        face = result.primary
-        if face is None or face.embedding is None:
-            reason = "no face" if face is None else ", ".join(face.quality.failures)
-            print(f"  skip {path.name}: {reason}")
-            rejected += 1
-            continue
-        embeddings.append(face.embedding)
-        scores.append(face.quality.score)
-        sources.append(path.name)
-        print(f"  ok   {path.name}  quality={face.quality.score:.2f}")
+    rejected = 0
+    if args.camera is not None:
+        embeddings, scores, sources = capture_enrollment(args, pipeline)
+    else:
+        embeddings, scores, sources = [], [], []
+        for path, frame in read_frames(expand_images(args.images)):
+            result = pipeline.process_frame(frame)
+            face = result.primary
+            if face is None or face.embedding is None:
+                reason = "no face" if face is None else ", ".join(face.quality.failures)
+                print(f"  skip {path.name}: {reason}")
+                rejected += 1
+                continue
+            if too_similar(face.embedding, embeddings, args.max_similarity):
+                print(f"  skip {path.name}: too similar to a photo already taken")
+                rejected += 1
+                continue
+            embeddings.append(face.embedding)
+            scores.append(face.quality.score)
+            sources.append(path.name)
+            print(f"  ok   {path.name}  quality={face.quality.score:.2f}")
 
     if not embeddings:
         print(
             "\nNothing passed the quality gate, so nothing was enrolled.\n"
-            "Use clear, well-lit, roughly frontal photos, or loosen the gate "
+            "Use clear, well-lit, roughly frontal views, or loosen the gate "
             "while you calibrate it.",
             file=sys.stderr,
         )
@@ -403,14 +509,31 @@ def build_parser() -> argparse.ArgumentParser:
     check = subparsers.add_parser("check", help="verify models and dependencies")
     check.set_defaults(func=cmd_check)
 
-    enroll = subparsers.add_parser("enroll", help="add a person from photos")
+    enroll = subparsers.add_parser("enroll", help="add a person, from the camera or photos")
     enroll.add_argument("--name", required=True)
     enroll.add_argument(
         "--consent",
         required=True,
         help="who agreed to this and when — recorded with the person, and required",
     )
-    enroll.add_argument("images", nargs="+")
+    enroll.add_argument(
+        "--camera",
+        type=int,
+        nargs="?",
+        const=0,
+        default=None,
+        help="capture from this camera instead of reading photos (default device 0)",
+    )
+    enroll.add_argument("--frames", type=int, default=6, help="views to capture (default 6)")
+    enroll.add_argument("--seconds", type=int, default=60, help="give up after this long")
+    enroll.add_argument(
+        "--max-similarity",
+        type=float,
+        default=0.97,
+        help="reject a view this close to one already taken (default 0.97)",
+    )
+    enroll.add_argument("--headless", action="store_true", help="no preview window")
+    enroll.add_argument("images", nargs="*")
     enroll.set_defaults(func=cmd_enroll)
 
     identify = subparsers.add_parser("identify", help="run the pipeline over images")
