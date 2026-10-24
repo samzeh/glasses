@@ -185,6 +185,8 @@ That is not a calibration. `voice-eval` does it properly on your voices.
 | `glasses voice-compare a.wav b.wav` | pairwise similarity between recordings |
 | `glasses transcribe audio/` | who said what, attributed (`--mic` to listen now) |
 | `glasses voice-eval recordings/` | calibrate `accept_threshold` on your own voices |
+| `glasses db init` | apply `schema.sql` to Postgres (`--reset` to start over) |
+| `glasses db stats` | rows, compression, and the live per-minute view |
 
 `--store DIR` moves the gallery, `--help` works on any subcommand.
 
@@ -206,6 +208,112 @@ Tests need none of that — numpy alone:
 ```sh
 uv pip install -e . --group dev && .venv/bin/python -m pytest
 ```
+
+## Storage: TigerData, one database for both halves
+
+The store above is a directory, and that is right for M0 and wrong for
+everything after it. The real system of record is Postgres —
+**TimescaleDB + pgvector in one instance** — because this project has exactly
+the two shapes of data that are usually split across two systems, and the
+join between them *is* the product:
+
+- **Relational profiles.** A few rows per person, read constantly, written
+  rarely: who they are, which encounters they appeared in, what was learned
+  about them, and their 512-d templates. The gallery search is a pgvector
+  query against the same rows.
+- **High-frequency streams.** `face_observation` and `speech_observation`,
+  one row per visible face per span and per speech segment, on the ESP's
+  microsecond clock. Append-only, and growing with wear time rather than with
+  the number of people.
+
+"Who was in front of me while this sentence was spoken" is a join across the
+two. Hold them in separate systems and that join becomes application code
+reconciling two clocks — which is the one bug this whole design is arranged to
+avoid.
+
+### Start one
+
+```sh
+docker run -d --name glasses-tiger -p 55432:5432 \
+    -e POSTGRES_PASSWORD=glasses -e POSTGRES_DB=glasses \
+    timescale/timescaledb-ha:pg17
+
+export DATABASE_URL=postgresql://postgres:glasses@127.0.0.1:55432/glasses
+uv pip install -e '.[db]'
+
+glasses db init      # tables, hypertables, aggregates, compression, retention
+glasses db stats     # what is in there, and the live per-minute view
+```
+
+`timescaledb-ha:pg17` is the image to use rather than plain `postgres`: it
+ships TimescaleDB, pgvector and pgvectorscale together, which is the whole
+claim being made here. `glasses db init` is idempotent — it says so and stops
+if the schema is already applied; `--reset` drops everything first.
+
+### What the schema does with it
+
+| | |
+|---|---|
+| hypertables | `face_observation`, `speech_observation`, one day per chunk |
+| continuous aggregates | `face_activity_per_minute`, `speech_activity_per_minute` |
+| the live view | `encounter_minute` — both sensors, one row per encounter per minute |
+| compression | segmented by `encounter_id`, after 7 days |
+| retention | raw stream dropped after 90 days, the per-minute history kept |
+
+Three decisions in there are worth the words:
+
+**Two clocks on every observation row, and only one of them is the
+authority.** `start_device_clock_us` is the ESP's monotonic counter and is what
+binding does interval arithmetic on. `observed_at` is the same instant mapped
+through the clock's single wall anchor, and it exists because `time_bucket`,
+chunk exclusion and humans all need it. Binding never reads it back: an NTP
+step mid-encounter would reorder two observations and file a sentence against
+the wrong face.
+
+**The aggregates group by `person_id` and count distinct one level up.** A
+continuous aggregate cannot hold a `count(DISTINCT …)` — incremental
+materialization needs a partial state that merges, and a distinct count's does
+not. So each aggregate holds one row per person per minute, and
+`encounter_minute` counts *those*, over data already collapsed by a factor of
+thousands.
+
+**Real-time aggregation is on (`materialized_only = false`).** The default
+since TimescaleDB 2.13 hides buckets the refresh job has not reached yet —
+which, at a one-minute bucket, means the current minute. That is the one
+minute a live demo is looking at.
+
+Nothing compresses during a demo, because nothing in a demo is seven days old.
+To watch it work:
+
+```sql
+SELECT compress_chunk(c) FROM show_chunks('face_observation') c;
+```
+
+`glasses db stats` then reports the chunk count and the before/after size.
+
+### Running the Postgres tests
+
+The default suite is numpy-only: no network, no Docker, no driver. The
+Postgres tests skip themselves unless `DATABASE_URL` is set, and when it is
+they run against the real thing in a schema of their own
+(`glasses_test_<pid>`), dropped afterwards:
+
+```sh
+DATABASE_URL=postgresql://postgres:glasses@127.0.0.1:55432/glasses \
+    .venv/bin/python -m pytest tests/test_pgvector_gallery.py
+```
+
+That is also how `PgVectorGallery` stopped being the untested half of the
+gallery. Running it found a real one: `hnsw.ef_search` defaults to 40, so a
+`LIMIT 64` — and 64 is `MatchConfig.search_limit`, the default every match
+uses — came back with 40 rows the moment the planner chose the vector index.
+No error, just a quietly truncated candidate list feeding the top-3
+aggregation. The gallery now raises `ef_search` to the requested limit and
+turns on pgvector 0.8's iterative scan, which is also what makes the
+`(model_name, model_version)` filter safe: an HNSW scan finds the nearest rows
+*before* the filter is applied, so a gallery part-way through a re-embedding
+could otherwise return nothing for the new model while thousands of its
+templates sat in the table.
 
 ## What is built
 
@@ -231,7 +339,9 @@ src/glasses/
   evaluation/
     verification.py  TAR at a fixed FAR, swept over gallery size
   db/
-    schema.sql     the full data model, not only the face tables
+    schema.sql     the full data model: profiles, and the stream hypertables
+    connect.py     the connection, and applying the schema one statement at a time
+    store.py       PgStore — the same operations as store.py, on Tiger
   voice/
     config.py      thresholds; min_duration_s is the one that matters
     audio.py       WAV/ffmpeg loading, resampling, level and SNR
@@ -248,6 +358,7 @@ src/glasses/
   store.py       file-backed people + templates, for M0
   cli.py         glasses check / enroll / identify / watch / bench
   voice_cli.py   the voice subcommands
+  db_cli.py      glasses db init / stats
 ```
 
 Faces and voices share `identity/` entirely — the gallery, the top-3
@@ -352,8 +463,17 @@ will not notice without the chart.
   a recording with known speaker turns — only the single-speaker path has.
 - ReDimNet is the voice equivalent of the AdaFace swap: least cross-domain
   degradation of the current crop, which is what far-field audio needs.
-- `PgVectorGallery` is written but untested — it needs a Postgres with
-  pgvector to test against.
+- `PgStore` is tested but not yet wired into `enroll` / `identify` / `watch`:
+  those still use the file-backed store, deliberately, so that making Tiger
+  the system of record could not destabilise the one path that works today.
+  Pointing the CLI at `--url` is the next commit, not a rewrite.
+- The retention and compression *policies* exist and are scheduled; neither
+  has been observed firing, because nothing here is seven days old. The
+  manual `compress_chunk` path is tested, which proves the configuration is
+  usable rather than merely present.
+- The continuous aggregates bucket at one minute, which is right for a demo
+  and probably wrong for a year of wear. A second, coarser aggregate rolled
+  up from the first is the normal answer and is not written.
 - No anti-spoofing and no re-identification across clothing changes. Both are
   deliberately excluded from v1.
 
