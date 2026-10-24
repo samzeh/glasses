@@ -1,0 +1,41 @@
+[project]
+name = "glasses"
+version = "0.1.0"
+description = "AR glasses that recognize people and recall what you know about them"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26"]
+
+# Heavy model/runtime deps are extras on purpose: every module under
+# glasses.face that holds real logic (align, quality, match, gallery, eval)
+# runs on numpy alone, so the test suite needs no model downloads.
+[project.optional-dependencies]
+face = [
+    "insightface>=0.7.3",
+    "onnxruntime>=1.17",
+    "opencv-python-headless>=4.9",
+]
+db = [
+    "psycopg[binary]>=3.1",
+    "pgvector>=0.2.5",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/glasses"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

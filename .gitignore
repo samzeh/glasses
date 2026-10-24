@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.env
+.DS_Store
+
+# Captured media and model weights never belong in git. Frames and audio of
+# other people are the highest-risk data in the system (see PRD, Privacy).
+data/
+models/
+*.onnx
+*.jpg
+*.jpeg
+*.png
+*.wav
