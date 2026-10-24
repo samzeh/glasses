@@ -18,6 +18,7 @@ import numpy as np
 
 from .face import FacePipeline, PipelineConfig
 from .face.types import FrameResult, MatchStatus
+from .meet_cli import register as register_meet
 from .store import LocalStore
 from .voice_cli import register as register_voice
 
@@ -565,6 +566,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.set_defaults(func=cmd_bench)
 
     register_voice(subparsers)
+    register_meet(subparsers)
 
     return parser
 
