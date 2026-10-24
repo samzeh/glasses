@@ -21,6 +21,7 @@ from . import env
 from .face import FacePipeline, PipelineConfig
 from .face.types import FrameResult, MatchStatus
 from .meet_cli import register as register_meet
+from .search_cli import register as register_search
 from .store import LocalStore
 from .voice_cli import register as register_voice
 
@@ -569,6 +570,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     register_voice(subparsers)
     register_meet(subparsers)
+    register_search(subparsers)
     register_db(subparsers)
 
     return parser

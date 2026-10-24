@@ -189,6 +189,159 @@ sherpa-onnx's own example default, and it is correct on the three-recording
 real-speech sample this was tested against (genuine 0.658, impostor 0.584).
 That is not a calibration. `voice-eval` does it properly on your voices.
 
+## Recall: ask about the people you have met
+
+Recognition answers *who is in front of me*. Recall answers the other
+question — *who have I met who works in biotech?* — and it is a search
+problem, not a recognition one. The transcripts already exist, attributed
+per speaker; what was missing was somewhere to ask them from.
+
+That somewhere is Elastic, with an [Elastic Agent
+Builder](https://www.elastic.co/docs/explore-analyze/ai-features/elastic-agent-builder)
+agent in front of it:
+
+```sh
+export ELASTIC_URL='https://my-project.es.us-east-1.aws.elastic.cloud'
+export ELASTIC_API_KEY='…'
+
+glasses search-setup                  # create the two indices
+glasses agent-setup                   # apply the tools and the agent
+glasses search-seed                   # four synthetic encounters to ask about
+glasses ask "who have I met who works in biotech"
+```
+
+The shape of the answer — the agent writes the prose, so the wording will
+differ:
+
+```
+? who have I met who works in biotech
+
+  Dan Kim — Helix Bio, "a biotech company doing protein design". Cal Hacks,
+  24 Oct. He also said he would send you the benchmark dataset and a preprint.
+
+  Marcus Webb — research scientist at Verida Therapeutics, "biotech,
+  immunology side". Cal Hacks, 24 Oct, about an hour later.
+
+  · glasses_find_people_by_fact(kind='industry', value='*biotech*')
+  · glasses_get_person_facts(person='*dan*')
+
+  2.1s  ·  conversation 9f3a…
+```
+
+The tool calls are printed on purpose. An answer that names the queries
+behind it is one the audience can check, and it is the first thing to read
+when the answer is wrong.
+
+### Elastic is a derived index, not the system of record
+
+```
+Postgres/TigerData          Elastic                Agent Builder
+(the truth)          →   (a searchable copy)  →   (6 tools + 1 agent)
+  people, encounters       transcript_segment       glasses ask "…"
+  facts, templates         person_fact
+```
+
+One-way sync, always. Nothing reads an answer out of Elastic and stores it
+as truth, and the index can be dropped and rebuilt from the source at any
+time — which is what makes it safe to put an LLM in front of. An agent
+querying a derived copy can be wrong about what it found; an agent
+querying the system of record can be wrong about what *is*.
+
+Two document types, both with deterministic ids so that re-running the
+sync overwrites rather than duplicates:
+
+| | fields |
+|---|---|
+| `transcript_segment` | text, person, encounter, start/end ms, `is_wearer`, location, time |
+| `person_fact` | kind, value, person, encounter, `evidence_span`, confidence |
+
+`is_wearer` is carried through everything and the agent is instructed
+about it explicitly: your own speech must never become a fact about the
+person opposite. `person_id` is nullable on both, matching
+`db/schema.sql` — an unidentified speaker and an unassigned fact are real
+states, and they stay searchable rather than being resolved by a guess.
+
+### The agent's tools are code, not clicks
+
+`src/glasses/search/agentbuilder.py` holds the six tool definitions and
+the agent's instructions. `glasses agent-setup` applies them and is
+idempotent: edit the file, run it again. `--dry-run` prints exactly what
+would be sent and needs no credentials at all, which is how the
+definitions get reviewed:
+
+```sh
+glasses agent-setup --dry-run
+```
+
+Two `index_search` tools do the open questions — Elastic picks keyword,
+semantic or hybrid retrieval itself, which beats a hand-written full-text
+query. Four `esql` tools do the precise ones (one person's facts, one
+person's utterances, who was at a place, who matches a fact), because
+those are exact filters that should return the same rows every time, with
+the evidence columns rather than a relevance-ranked blob.
+
+### Seed data is obviously synthetic
+
+A recall demo needs a past, and the honest way to get one is to fabricate
+it openly rather than to record strangers so a demo looks better. Every
+seeded document carries `source: "seed"`, every person id starts
+`seed-person-` and every encounter id `seed-encounter-`:
+
+```sh
+glasses search-seed            # 26 utterances, 22 facts, 4 encounters
+glasses search-check           # capture and seed counted separately
+glasses search-seed --clear    # removes every source=seed document, and
+                               # cannot touch a real capture
+```
+
+Real recordings go in the same indices as `source: "capture"`:
+
+```sh
+glasses search-index conversation.wav --location "Cal Hacks"
+```
+
+Facts are not extracted from real audio yet — the `fact` table and its
+mapping exist, the extractor does not — so `search-index` writes segments
+only. Segments alone already answer "what did Dan say he'd send me?".
+
+### Runbook: pointing it at an Elastic Serverless project
+
+Agent Builder is GA on Serverless and in 9.3 (preview in 9.2). **This path
+has not been run against a live project** — everything in `glasses.search`
+is tested against a fake HTTP transport, and the API shapes come from the
+Elastic docs. Expect to debug the first run.
+
+1. Create an **Elasticsearch Serverless** project at
+   [cloud.elastic.co](https://cloud.elastic.co).
+2. From the project's connection details, copy the **Elasticsearch
+   endpoint** (`https://….es.….elastic.cloud`) and create an **API key**.
+3. Export both. Agent Builder is a *Kibana* API, so the commands also need
+   the Kibana endpoint; it is derived by swapping `.es.` for `.kb.`, which
+   is right on Elastic Cloud. Set it yourself if that is wrong for your
+   deployment:
+
+   ```sh
+   export ELASTIC_URL='https://my-project.es.us-east-1.aws.elastic.cloud'
+   export ELASTIC_API_KEY='…'
+   export ELASTIC_KIBANA_URL='https://my-project.kb.us-east-1.aws.elastic.cloud'
+   ```
+
+4. `glasses search-check` — prints both endpoints, the key redacted, the
+   Elasticsearch version, what is in each index, and whether the agent
+   exists. Fix anything it reports before going on.
+5. `glasses search-setup` then `glasses agent-setup` then
+   `glasses search-seed`.
+6. `glasses ask "who did I meet at Cal Hacks"`.
+
+Optional: `glasses search-setup --semantic` adds a `semantic_text` field
+and `glasses search-seed --semantic` populates it. It needs an inference
+endpoint in the project, so it is off by default — a demo that can fail on
+stage is not an improvement.
+
+Other variables: `ELASTIC_INDEX_PREFIX` (default `glasses`) and
+`ELASTIC_AGENT_ID` (default `glasses_recall`). No credential is ever read
+from a file in this repo.
+
 ### Every command
 
 | command | what it does |
@@ -212,6 +365,12 @@ That is not a calibration. `voice-eval` does it properly on your voices.
 | `glasses transcribe audio/` | who said what, attributed, via Cartesia (`--mic` to listen now) |
 | `glasses transcribe audio/ --local` | the same, on local Whisper — no key, no network |
 | `glasses voice-eval recordings/` | calibrate `accept_threshold` on your own voices |
+| `glasses ask "who did I meet at Cal Hacks"` | ask the Agent Builder agent about people you have met |
+| `glasses search-check` | what Elastic is configured, reachable, and holding |
+| `glasses search-setup` | create the two indices (`--recreate`, `--semantic`, `--dry-run`) |
+| `glasses agent-setup` | apply the Agent Builder tools and agent (`--dry-run`) |
+| `glasses search-seed` | load the synthetic demo encounters (`--clear` to remove) |
+| `glasses search-index audio/` | transcribe real recordings and index what was said |
 | `glasses db init` | apply `schema.sql` to Postgres (`--reset` to start over) |
 | `glasses db stats` | rows, compression, and the live per-minute view |
 
@@ -384,9 +543,18 @@ src/glasses/
     types.py       Interval, FaceObservation, SpeechObservation, Encounter
     session.py     the dwell + partner-speech trigger state machine
   identity/        shared by both channels: Embedding, gallery, matcher
+  search/
+    config.py      ELASTIC_URL, ELASTIC_API_KEY, index names; nothing hardcoded
+    client.py      JSON over HTTP on the stdlib, behind one Transport seam
+    mappings.py    the two index mappings, dynamic: strict
+    documents.py   TranscriptSegment, PersonFact, deterministic ids
+    indexer.py     one-way sync, per-document bulk error reporting
+    agentbuilder.py  the 6 tools, the agent's instructions, converse
+    seed.py        four synthetic encounters, every doc source=seed
   store.py       file-backed people + templates, for M0
   cli.py         glasses check / enroll / identify / watch / bench
   voice_cli.py   the voice subcommands
+  search_cli.py  glasses ask, and the setup/seed/index commands
   db_cli.py      glasses db init / stats
 ```
 
@@ -396,7 +564,9 @@ modality-agnostic. The voice pipeline added no matching code of its own.
 
 Everything holding real logic runs on numpy alone. Only `detect.py` and
 `embed.py` need model weights, and both sit behind Protocols, so the suite runs
-without downloading anything.
+without downloading anything. `search/` adds no dependency either: it is
+four verbs against a JSON API, so it uses `urllib` and every request goes
+through one `Transport`, which is the seam the tests replace.
 
 ## Measured latency
 
@@ -497,6 +667,21 @@ will not notice without the chart.
   unmeasured.
 - ReDimNet is the voice equivalent of the AdaFace swap: least cross-domain
   degradation of the current crop, which is what far-field audio needs.
+- `PgVectorGallery` is written but untested — it needs a Postgres with
+  pgvector to test against.
+- **The whole Elastic path is unverified against a live cluster.** No
+  request in `glasses.search` has ever left the process: the tests run
+  against a fake transport, and the request shapes come from Elastic's
+  docs rather than from a response. The specific things to expect to
+  debug are the Kibana-vs-Elasticsearch base URL, whether `PUT
+  /api/agent_builder/tools/{id}` accepts each definition as written, and
+  whether `TO_LOWER(value.keyword) LIKE ?value` is accepted in an ES|QL
+  tool.
+- Facts are only ever seeded. Nothing extracts a fact from a real
+  transcript yet, so `search-index` indexes segments and no facts.
+- Elastic holds a copy, and the sync is manual. There is no trigger that
+  indexes an encounter when it closes; `search-index` and `search-seed`
+  are run by hand.
 - `PgStore` is tested but not yet wired into `enroll` / `identify` / `watch`:
   those still use the file-backed store, deliberately, so that making Tiger
   the system of record could not destabilise the one path that works today.
