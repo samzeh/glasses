@@ -35,7 +35,7 @@ from .config import SAMPLE_RATE, VoicePipelineConfig
 from .embed import SpeakerEmbedder
 from .quality import assess, split_long_segment
 from .segment import Segmenter, merge_adjacent
-from .types import RecordingResult, VoiceResult, VoiceTimings
+from .types import RecordingResult, SpeechSegment, VoiceResult, VoiceTimings
 
 
 class VoicePipeline:
@@ -79,9 +79,10 @@ class VoicePipeline:
             embeddings = self.embedder.embed_batch(survivor_segments) if survivors else []
 
         with clock("match"):
+            wearer_of = self._wearer_segments(segments, survivors, embeddings)
             results: dict[int, tuple[Embedding, bool, object]] = {}
             for index, embedding in zip(survivors, embeddings, strict=True):
-                if self.is_wearer(embedding):
+                if index in wearer_of:
                     # The wearer is not a conversational partner, so their
                     # speech never reaches the gallery and never becomes a
                     # fact about anyone.
@@ -110,6 +111,91 @@ class VoicePipeline:
             segments=tuple(voice_results),
             timings=clock.timings(),
             audio_duration_s=audio.size / float(SAMPLE_RATE),
+        )
+
+    def _wearer_segments(
+        self,
+        segments: list[SpeechSegment],
+        survivors: list[int],
+        embeddings: list[Embedding],
+    ) -> set[int]:
+        """Which segments are the wearer's own speech.
+
+        Decided per *speaker cluster* when the segmenter labelled turns,
+        and only otherwise by the absolute threshold. The distinction
+        matters because the absolute version does not work: measured on
+        this project's own recordings, a conversational partner scored
+        0.887 against the enrolled wearer while the wearer's own speech
+        scored 0.878 and 0.927. No threshold separates those, so one of
+        the two mistakes is guaranteed — and marking a partner as the
+        wearer silently discards everything they said.
+
+        Relatively, it is easy. Exactly one person in a conversation is
+        wearing the glasses, so the wearer is whichever cluster sits
+        closest to the enrolled voiceprints, and every other cluster is a
+        partner no matter how close it also sits. One comparison the
+        embeddings can win, instead of one they cannot.
+        """
+        if not self.wearer_embeddings or not survivors:
+            return set()
+
+        scores = {
+            index: self._wearer_similarity(embedding)
+            for index, embedding in zip(survivors, embeddings, strict=True)
+        }
+
+        clusters: dict[int, list[int]] = {}
+        for index in survivors:
+            speaker = segments[index].speaker
+            if speaker is None:
+                # No turn labels: fall back to the absolute threshold,
+                # which is all there is to go on.
+                floor = self.config.wearer.accept_threshold
+                return {i for i, score in scores.items() if score >= floor}
+            clusters.setdefault(speaker, []).append(index)
+
+        if len(clusters) == 1:
+            # One voice in the recording. It is the wearer only if it
+            # actually resembles them — otherwise this is someone else
+            # talking and the wearer never spoke.
+            only = next(iter(clusters.values()))
+            mean = sum(scores[i] for i in only) / len(only)
+            return set(only) if mean >= self.config.wearer.accept_threshold else set()
+
+        best = max(
+            clusters,
+            key=lambda speaker: sum(scores[i] for i in clusters[speaker]) / len(clusters[speaker]),
+        )
+        return set(clusters[best])
+
+    def _wearer_similarity(self, embedding: Embedding) -> float:
+        """Best similarity to any enrolled wearer voiceprint.
+
+        Scored by the single best sample rather than a mean: the wearer's
+        voice varies a lot with how they are speaking, and any one strong
+        match is enough to make the call.
+
+        Raises when the wearer has templates but none from this probe's
+        model, rather than quietly answering "not the wearer". That answer
+        would be indistinguishable from a correct one, and its consequence
+        is the worst failure in the system: the wearer's own speech treated
+        as a partner's, so their life becomes facts about the person
+        opposite. A half-finished re-embedding should stop the run.
+        """
+        comparable = [
+            candidate
+            for candidate in self.wearer_embeddings
+            if candidate.key() == embedding.key()
+        ]
+        if not comparable:
+            raise ValueError(
+                f"no wearer voiceprint for model {embedding.model_name}"
+                f"@{embedding.model_version}; the gallery holds "
+                f"{sorted({c.key() for c in self.wearer_embeddings})}. "
+                "Re-enroll the wearer, or the wearer check cannot run."
+            )
+        return max(
+            cosine_similarity(embedding.vector, candidate.vector) for candidate in comparable
         )
 
     def is_wearer(self, embedding: Embedding) -> bool:

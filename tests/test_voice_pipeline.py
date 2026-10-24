@@ -395,3 +395,93 @@ def test_the_rendered_transcript_names_the_speakers():
     assert "you: hello" in text
     assert "Vrinda: hi" in text
     assert "speaker 2: who am I" in text
+
+
+# --- who is the wearer, decided between speakers --------------------------
+
+
+def test_the_closest_speaker_cluster_is_the_wearer_even_when_both_are_close():
+    """The absolute threshold cannot do this. Measured on real recordings,
+    a partner scored 0.887 against the enrolled wearer while the wearer's
+    own speech scored 0.878 — so an absolute cut marks one of them wrong,
+    and marking a partner as the wearer discards everything they said.
+    Between two clusters it is easy: the nearer one is the wearer."""
+    wearer_vec = np.array([1.0, 0, 0, 0])
+    # Both clusters sit above any sane absolute threshold; cluster 0 is
+    # merely nearer.
+    near = np.array([0.99, 0.141, 0, 0])
+    far = np.array([0.97, 0.243, 0, 0])
+    pipeline = build(
+        [(1.0, 7.0, 0), (8.0, 14.0, 1)],
+        wearer=[unit(wearer_vec, "fake/wespeaker", "1")],
+        vectors=[near, far],
+    )
+
+    result = pipeline.process(recording(20.0))
+
+    assert [s.is_wearer for s in result.segments] == [True, False]
+
+
+def test_every_segment_of_the_wearer_cluster_is_marked():
+    wearer_vec = np.array([1.0, 0, 0, 0])
+    pipeline = build(
+        [(1.0, 7.0, 0), (8.0, 14.0, 1), (15.0, 21.0, 0)],
+        wearer=[unit(wearer_vec, "fake/wespeaker", "1")],
+        vectors=[
+            np.array([0.99, 0.141, 0, 0]),
+            np.array([0.80, 0.600, 0, 0]),
+            np.array([0.98, 0.199, 0, 0]),
+        ],
+    )
+
+    result = pipeline.process(recording(25.0))
+
+    assert [s.is_wearer for s in result.segments] == [True, False, True]
+
+
+def test_a_lone_voice_that_is_not_the_wearer_is_not_claimed():
+    """Someone else talking alone is not the wearer just because they are
+    the only cluster there is."""
+    pipeline = build(
+        [(1.0, 7.0, 0)],
+        wearer=[unit(np.array([1.0, 0, 0, 0]), "fake/wespeaker", "1")],
+        vectors=[np.array([0.0, 1.0, 0, 0])],
+    )
+
+    result = pipeline.process(recording())
+
+    assert [s.is_wearer for s in result.segments] == [False]
+
+
+def test_a_lone_voice_that_is_the_wearer_is_claimed():
+    pipeline = build(
+        [(1.0, 7.0, 0)],
+        wearer=[unit(np.array([1.0, 0, 0, 0]), "fake/wespeaker", "1")],
+        vectors=[np.array([1.0, 0, 0, 0])],
+    )
+
+    result = pipeline.process(recording())
+
+    assert [s.is_wearer for s in result.segments] == [True]
+
+
+def test_unlabelled_segments_fall_back_to_the_absolute_threshold():
+    """VAD alone gives no turn labels, so there are no clusters to compare
+    and the threshold is all there is."""
+    pipeline = build(
+        [(1.0, 7.0, None), (8.0, 14.0, None)],
+        wearer=[unit(np.array([1.0, 0, 0, 0]), "fake/wespeaker", "1")],
+        vectors=[np.array([1.0, 0, 0, 0]), np.array([0.0, 1.0, 0, 0])],
+    )
+
+    result = pipeline.process(recording(20.0))
+
+    assert [s.is_wearer for s in result.segments] == [True, False]
+
+
+def test_no_enrolled_wearer_means_nobody_is_the_wearer():
+    pipeline = build([(1.0, 7.0, 0)], vectors=[np.array([1.0, 0, 0, 0])])
+
+    result = pipeline.process(recording())
+
+    assert [s.is_wearer for s in result.segments] == [False]

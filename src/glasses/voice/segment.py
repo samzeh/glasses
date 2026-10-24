@@ -115,9 +115,20 @@ class DiarizingSegmenter:
     Speaker 1 here has no relationship to speaker 1 in any other recording —
     that is what the gallery is for.
 
-    ``num_speakers`` pins the count when you know it, which is far more
-    accurate than letting clustering guess. In a one-on-one conversation you
-    usually do know: it is two.
+    ``num_speakers`` pins the count, and **pinning it makes this worse,
+    not better**. Measured on a two-speaker recording with known turns:
+    ``num_speakers=2`` put all three turns in one cluster, while leaving it
+    at ``-1`` recovered the turns exactly. The intuition that telling the
+    clusterer the answer must help is wrong here — sherpa's fast clustering
+    treats the count as a cap it reaches by a different route, and the
+    route it takes when free is the one that works. Leave it alone unless a
+    recording proves otherwise.
+
+    ``cluster_threshold`` is the knob that does work: 0.5 separates, 0.8
+    collapses everything back to one speaker. That is narrow because the
+    embeddings themselves are marginal — on this project's own recordings,
+    same-speaker pairs scored 0.792-0.960 and different-speaker pairs
+    0.581-0.817, so the distributions overlap and no threshold is clean.
     """
 
     def __init__(
@@ -130,7 +141,7 @@ class DiarizingSegmenter:
         num_threads: int = 2,
         provider: str = "cpu",
     ) -> None:
-        self._num_speakers = num_speakers
+        self._num_speakers = -1 if num_speakers is None else num_speakers
         self._cluster_threshold = cluster_threshold
         self._min_duration_on = min_duration_on
         self._min_duration_off = min_duration_off

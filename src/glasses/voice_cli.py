@@ -46,9 +46,13 @@ def build_voice_pipeline(
     store: LocalStore,
     *,
     diarize: bool = False,
-    num_speakers: int = -1,
+    num_speakers: int | None = -1,
 ) -> VoicePipeline:
-    segmenter = DiarizingSegmenter(num_speakers=num_speakers) if diarize else VadSegmenter()
+    # -1 means "work it out", and None arrives from an unset CLI flag.
+    # sherpa rejects None outright, so the coercion happens here rather
+    # than at each call site.
+    count = -1 if num_speakers is None else num_speakers
+    segmenter = DiarizingSegmenter(num_speakers=count) if diarize else VadSegmenter()
     return VoicePipeline(
         segmenter=segmenter,
         embedder=WeSpeakerEmbedder(),

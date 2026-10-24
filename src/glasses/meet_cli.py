@@ -42,8 +42,15 @@ def cmd_meet(args: argparse.Namespace) -> int:
         embedder=ArcFaceEmbedder(providers=providers),
         gallery=store.gallery(FACE),
     )
+    # Split the voices so that the diarizer can assign them to the right speaker
+    if args.diarize:
+        from .voice import DiarizingSegmenter
+
+        segmenter = DiarizingSegmenter(num_speakers=args.speakers)
+    else:
+        segmenter = VadSegmenter()
     voice_pipeline = VoicePipeline(
-        segmenter=VadSegmenter(),
+        segmenter=segmenter,
         embedder=WeSpeakerEmbedder(),
         gallery=store.gallery(VOICE),
         wearer_embeddings=store.wearer_embeddings(),
@@ -119,6 +126,15 @@ def cmd_meet(args: argparse.Namespace) -> int:
     if audio.size == 0:
         print("no audio captured", file=sys.stderr)
         return 1
+
+    if args.save_audio:
+        # The whole take, not the per-capture clips below: segmentation and
+        # lip-sync are what need debugging, and re-recording a conversation
+        # to retry them loses the thing being debugged.
+        full = Path(args.out) / "recording.wav"
+        full.parent.mkdir(parents=True, exist_ok=True)
+        write_wav(full, audio)
+        print(f"  saved {full}")
 
     return _resolve(args, store, voice_pipeline, face_pipeline, tracker, audio, audio_start_us)
 
@@ -411,6 +427,19 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
         help=f"how sure a heard name must be to enrol someone (default {MIN_NAME_CONFIDENCE})",
     )
     meet.add_argument("--dry-run", action="store_true", help="extract but index nothing")
-    meet.add_argument("--save-audio", action="store_true")
+    meet.add_argument(
+        "--diarize",
+        action="store_true",
+        help="split the audio by speaker first — needed whenever two people "
+        "talk, or a back-and-forth arrives as one segment holding both",
+    )
+    meet.add_argument(
+        "--speakers",
+        type=int,
+        default=-1,
+        help="pin the speaker count. Measured to make clustering WORSE on "
+        "this model — leave it unless a recording proves otherwise",
+    )
+    meet.add_argument("--save-audio", action="store_true", help="keep the recorded wav")
     meet.add_argument("--headless", action="store_true")
     meet.set_defaults(func=cmd_meet)
