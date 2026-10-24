@@ -92,7 +92,7 @@ def test_the_request_pins_the_schema_and_zero_temperature():
     extractor([GOOD], captured=captured).extract(CONVERSATION, encounter_id="e1")
 
     url, headers, body = captured[0]
-    assert "gemini-2.5-flash:generateContent" in url
+    assert f"{F.DEFAULT_MODEL}:generateContent" in url
     assert headers["x-goog-api-key"] == "test-key"
     config = body["generationConfig"]
     assert config["responseMimeType"] == "application/json"
@@ -245,3 +245,37 @@ def test_candidate_text_that_is_not_json_is_a_gemini_error():
     bad = F.GeminiExtractor("k", post=lambda *_: body)
     with pytest.raises(F.GeminiError, match="did not parse"):
         bad.extract(CONVERSATION, encounter_id="e1")
+
+
+def _urlopen_raising(monkeypatch, error):
+    """Make the real ``_post`` fail the way the network does.
+
+    These go through ``_post`` rather than an injected ``post``: the
+    mapping from a socket failure to GeminiError lives there, so a test
+    that injects its own callable would pass with the bug still in.
+    """
+    import urllib.request
+
+    def boom(*_a, **_k):
+        raise error
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+
+
+def test_a_timeout_becomes_a_retryable_gemini_error(monkeypatch):
+    """A read that times out mid-response raises the builtin TimeoutError,
+    not a URLError. It escaped ``_post`` uncaught and took the whole
+    command down, transcript included."""
+    _urlopen_raising(monkeypatch, TimeoutError("timed out"))
+
+    with pytest.raises(F.GeminiError, match="did not answer") as caught:
+        F._post("https://example.invalid", {}, b"{}", timeout_s=1.0)
+    assert caught.value.retryable
+
+
+def test_a_socket_error_becomes_a_retryable_gemini_error(monkeypatch):
+    _urlopen_raising(monkeypatch, OSError("connection reset"))
+
+    with pytest.raises(F.GeminiError, match="could not reach") as caught:
+        F._post("https://example.invalid", {}, b"{}")
+    assert caught.value.retryable

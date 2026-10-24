@@ -397,6 +397,16 @@ def _post(url: str, headers: dict[str, str], body: bytes, timeout_s: float = 60.
         ) from error
     except urllib.error.URLError as error:
         raise GeminiError(f"could not reach Gemini: {error.reason}", retryable=True) from error
+    except TimeoutError as error:
+        # A read that times out mid-response raises the builtin, not a
+        # URLError, so it escaped uncaught and took the whole command down
+        # — transcript included. Extraction is allowed to fail; the
+        # transcript above it is the expensive half.
+        raise GeminiError(
+            f"Gemini did not answer within {timeout_s:.0f}s", retryable=True
+        ) from error
+    except OSError as error:
+        raise GeminiError(f"could not reach Gemini: {error}", retryable=True) from error
 
 
 def _detail(error: urllib.error.HTTPError) -> str:
