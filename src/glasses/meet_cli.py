@@ -178,7 +178,13 @@ def _resolve(args, store, voice_pipeline, face_pipeline, tracker, audio, audio_s
         return 1
 
     partners = [c for c in captures if not c.is_wearer]
-    assign_speakers(partners, tracker, audio, audio_start_us, AsdConfig())
+    assign_speakers(
+        partners,
+        tracker,
+        audio,
+        audio_start_us,
+        AsdConfig(min_correlation=args.min_correlation, min_margin=args.min_margin),
+    )
 
     out_dir = Path(args.out)
     print(f"\n{len(captures)} utterance(s)\n")
@@ -202,7 +208,7 @@ def _resolve(args, store, voice_pipeline, face_pipeline, tracker, audio, audio_s
 
         assigned += 1
         track = capture.track
-        if track.best_frame is not None:
+        if track.best_frame is not None and track.best_detection is not None:
             capture.image_path = save_crop(
                 track.best_frame, track.best_detection.bbox, out_dir / f"{index:03d}.jpg"
             )
@@ -245,6 +251,19 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     meet.add_argument("--device", type=int, default=None, help="audio input index")
     meet.add_argument("--out", default="captures", help="where to write face crops")
     meet.add_argument("--detect-every", type=int, default=5, help="frames between detections")
+    meet.add_argument(
+        "--min-correlation",
+        type=float,
+        default=0.30,
+        help="lip-sync correlation the winner must reach (default 0.30). Lower "
+        "it if real footage comes back unassigned with plausible-looking scores",
+    )
+    meet.add_argument(
+        "--min-margin",
+        type=float,
+        default=0.15,
+        help="how far the winner must beat the runner-up (default 0.15)",
+    )
     meet.add_argument("--save-audio", action="store_true")
     meet.add_argument("--headless", action="store_true")
     meet.set_defaults(func=cmd_meet)
