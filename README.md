@@ -155,6 +155,13 @@ glasses transcribe conversation.wav --local   # keep it all on this machine
 glasses identify-voice conversation.wav --diarize --speakers 2
 ```
 
+You do not have to export anything: a `.env` beside the repo is read at
+startup, searched upwards from wherever you ran the command, so
+`CARTESIA_API_KEY=sk_car_…` in a file is enough. A variable already set in
+the shell always wins over the file. This matters more than it looks —
+without the key the transcript still arrives, quietly produced by the local
+recogniser, and the only sign is the `transcribing with …` line.
+
 `--mic` records with a live level meter, so you can see it is hearing you
 rather than discovering it was muted twenty seconds later. `--save out.wav`
 keeps the recording; from files instead, pass paths in place of `--mic`.
