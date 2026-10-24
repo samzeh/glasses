@@ -1,10 +1,12 @@
 """Voice identity: who is speaking, as opposed to what they said.
 
-Transcription is deliberately not here. This package answers "which enrolled
-person is this voice", which no speech-to-text API does — they transcribe
-sound, they do not track people across recordings.
+Identity is the part no speech-to-text API provides. Cartesia transcribes
+sound very well and does not track people across recordings; that is this
+package's job, and transcription hangs off it per segment rather than the
+other way round.
 """
 
+from .cartesia import CartesiaError, CartesiaTranscriber
 from .config import (
     SAMPLE_RATE,
     VoiceMatchConfig,
@@ -20,6 +22,7 @@ from .transcribe import (
     Transcriber,
     Utterance,
     WhisperTranscriber,
+    build_transcriber,
     render,
     transcribe_segments,
 )
@@ -33,6 +36,8 @@ from .types import (
 
 __all__ = [
     "SAMPLE_RATE",
+    "CartesiaError",
+    "CartesiaTranscriber",
     "DiarizingSegmenter",
     "RecordingResult",
     "SegmentQuality",
@@ -52,6 +57,7 @@ __all__ = [
     "WhisperTranscriber",
     "WearerConfig",
     "assess",
+    "build_transcriber",
     "merge_adjacent",
     "render",
     "transcribe_segments",
