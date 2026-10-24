@@ -42,7 +42,8 @@ from .search.documents import PersonFact
 from .voice.transcribe import Utterance
 
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
-DEFAULT_MODEL = "gemini-2.5-flash"
+
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 KEY_HINT = (
     "Set GEMINI_API_KEY (a .env beside the repo is read at startup). "
