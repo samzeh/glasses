@@ -18,6 +18,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .autoenroll import MIN_NAME_CONFIDENCE
 from .store import LocalStore
 
 
@@ -43,6 +44,17 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
         "--gemini-model", default=None, help="Gemini model for extraction"
     )
     remember.add_argument(
+        "--no-enroll",
+        action="store_true",
+        help="do not create people from introductions",
+    )
+    remember.add_argument(
+        "--name-confidence",
+        type=float,
+        default=MIN_NAME_CONFIDENCE,
+        help=f"how sure a heard name must be to enrol someone (default {MIN_NAME_CONFIDENCE})",
+    )
+    remember.add_argument(
         "--dry-run",
         action="store_true",
         help="print the facts without indexing them",
@@ -55,6 +67,7 @@ def _now_iso() -> str:
 
 
 def cmd_remember(args: argparse.Namespace) -> int:
+    from .autoenroll import enroll_from_conversation, relabel_utterances
     from .facts import DEFAULT_MODEL, GeminiError, GeminiExtractor, has_api_key
     from .search.documents import segments_from_utterances
     from .voice import WhisperTranscriber, build_transcriber, render
@@ -110,10 +123,11 @@ def cmd_remember(args: argparse.Namespace) -> int:
 
         result = pipeline.process(samples)
         usable = [i for i in result.segments if i.embedding is not None]
+        speaker_labels = [_label_of(i, store) for i in usable]
         utterances, transcriber = transcribe_with_fallback(
             transcriber,
             [i.segment for i in usable],
-            [_label_of(i, store) for i in usable],
+            speaker_labels,
             fallback=lambda: WhisperTranscriber(args.model or "base.en"),
         )
 
@@ -135,6 +149,27 @@ def cmd_remember(args: argparse.Namespace) -> int:
             # Losing it because extraction failed would be the wrong trade.
             print(f"\n  ! extraction failed: {error}", file=sys.stderr)
             facts = []
+
+        # Someone who introduced themselves can be enrolled from the
+        # conversation itself, which is the difference between facts about
+        # "Speaker 1" and facts about a person the next encounter will
+        # recognise. Runs before printing so the facts print with the name
+        # they will be indexed under.
+        if not args.no_enroll:
+            enrolled, facts = enroll_from_conversation(
+                store,
+                facts,
+                usable,
+                speaker_labels,
+                utterances=utterances,
+                min_confidence=args.name_confidence,
+                source=f"{label} ({encounter_id})",
+            )
+            if enrolled:
+                utterances = relabel_utterances(utterances, enrolled)
+                print(f"\n  enrolled {len(enrolled)} new person/people from this conversation:")
+                for item in enrolled:
+                    print(f"    {item}")
 
         print(f"\n  {len(facts)} fact(s):")
         for fact in facts:
