@@ -324,6 +324,9 @@ def _remember(args, store, face_pipeline, captures, audio_start_us) -> int:  # t
             # Faces, not voiceprints: the camera is why this path exists.
             embeddings=face_templates_by_label(captures, identities),
             kind="face",
+            # Everyone who gets here is a face the gallery already failed
+            # to match, so they are a new person whatever they are called.
+            allow_duplicate_names=True,
         )
         if enrolled:
             utterances = relabel_utterances(utterances, enrolled)

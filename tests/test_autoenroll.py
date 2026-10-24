@@ -242,3 +242,58 @@ def test_relabelling_leaves_already_identified_speakers_alone():
         )
     ]
     assert A.relabel_utterances(known, enrolled)[0].person_name == "Dan"
+
+
+# --- face is the identity, the name is only what someone said ------------
+
+
+def test_a_new_face_is_enrolled_even_when_the_name_is_taken(tmp_path):
+    """The camera path's rule. Everyone reaching enrollment is a face the
+    gallery already failed to match, so they are a new person whatever
+    they are called — declining on the name would mean a new face never
+    gets enrolled at all."""
+    s = store(tmp_path)
+    s.enroll("Vrinda", [embedding(9)], consent_note="an earlier encounter", kind="voice")
+
+    enrolled, updated = A.enroll_from_conversation(
+        s,
+        [fact("name", "Vrinda", speaker="Speaker 1")],
+        [],
+        [],
+        embeddings={"Speaker 1": [embedding(2)]},
+        kind="face",
+        allow_duplicate_names=True,
+    )
+
+    assert len(enrolled) == 1
+    assert enrolled[0].kind == "face"
+    assert len(s) == 2  # the voice-only one, plus this new face
+    assert updated[0].person_id == enrolled[0].person_id
+
+
+def test_the_voice_path_still_declines_on_a_taken_name(tmp_path):
+    """There the name is the only evidence, so a collision is a merge."""
+    s = store(tmp_path)
+    s.enroll("Vrinda", [embedding(9)], consent_note="earlier", kind="voice")
+
+    enrolled, _ = A.enroll_from_conversation(
+        s, [fact("name", "Vrinda", speaker="Speaker 1")], [result(1)], [(None, None, False)]
+    )
+
+    assert enrolled == []
+    assert len(s) == 1
+
+
+def test_a_recognised_face_never_reaches_enrollment(tmp_path):
+    """Their stored name wins over anything said in the room: the facts
+    already carry a person_id, so names_by_speaker skips them."""
+    s = store(tmp_path)
+    facts = [fact("name", "Vrinda", speaker="V. Sharma", person="known-id")]
+
+    enrolled, updated = A.enroll_from_conversation(
+        s, facts, [], [], embeddings={"V. Sharma": [embedding(2)]}, kind="face"
+    )
+
+    assert enrolled == []
+    assert updated[0].person_name == "V. Sharma"
+    assert updated[0].person_id == "known-id"

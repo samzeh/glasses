@@ -27,9 +27,17 @@ design:
   one for ordinary facts: a wrong employer is a wrong row, a wrong name
   is a person who does not exist and who will collect other people's
   facts for as long as the gallery lives.
-* **Only a name that is not already taken.** Two people called Dan in
-  one gallery is a merge problem, and merging is M4's job, not this
-  module's. A collision declines rather than guesses.
+* **Only a name that is not already taken — on the voice path.** There
+  the name is the sole evidence, so a second Dan is a merge and merging
+  is M4's job. The camera path lifts this, because there the face is the
+  identity and the name is only what somebody said: a face the gallery
+  failed to match is a new person whatever they are called.
+
+The ordering matters and is the camera path's whole advantage. The face
+is checked first, and when it matches, that person's **stored** name wins
+over whatever was said in the room — a known face is not renamed by a
+mishearing, and their facts never reach this module at all. Only a face
+the gallery could not place gets here.
 """
 
 from __future__ import annotations
@@ -142,6 +150,7 @@ def enroll_from_conversation(
     source: str = "",
     embeddings: dict[str, list[Any]] | None = None,
     kind: str = "voice",
+    allow_duplicate_names: bool = False,
 ) -> tuple[list[Enrolled], list[PersonFact]]:
     """Create people from introductions, and re-attribute their facts.
 
@@ -151,6 +160,14 @@ def enroll_from_conversation(
     two people, so enrolling a stranger on their voiceprint creates
     someone the next encounter will not recognise. ``kind`` says which
     gallery they land in.
+
+    ``allow_duplicate_names`` follows from which evidence is in charge.
+    The face is the identity, and the name is only what someone said:
+    anyone this reaches with a face template is a face the gallery has
+    already failed to match, so they are a new person whatever they are
+    called, and declining because the name is taken would mean a new face
+    never gets enrolled. On the voice-only path the name is the sole
+    evidence, so a collision stays a decline.
 
     Returns what was enrolled and the facts with ``person_id`` filled in
     for them. The facts are rebuilt rather than mutated because
@@ -172,8 +189,11 @@ def enroll_from_conversation(
             # Heard a name but kept no usable template for them. Enrolling
             # now would make a person the next encounter cannot recognise.
             continue
-        if store.find_by_name(name) is not None:
-            # A second Dan is a merge, and merging is not this module's job.
+        if not allow_duplicate_names and store.find_by_name(name) is not None:
+            # Name is the only evidence on this path, so a second Dan is a
+            # merge and merging is not this module's job. The camera path
+            # passes allow_duplicate_names because it has better evidence:
+            # see the parameter's note.
             continue
 
         person_id = store.enroll(
