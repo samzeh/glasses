@@ -138,6 +138,21 @@ class Suggestion:
     person_id: str
     name: str
     similarity: float
+    bounds: tuple[float, float, float, float]
+
+
+def _same_face(first: Suggestion, second: Suggestion) -> bool:
+    if first.person_id != second.person_id:
+        return False
+    ax1, ay1, ax2, ay2 = first.bounds
+    bx1, by1, bx2, by2 = second.bounds
+    width = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+    height = max(0.0, min(ay2, by2) - max(ay1, by1))
+    overlap = width * height
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - overlap
+    return union > 0 and overlap / union >= 0.3
 
 
 class ReviewState(StrEnum):
@@ -163,7 +178,7 @@ class SuggestionReview:
             self.current = None
             self.state = None
             return False
-        if self.current is not None and self.current.person_id == suggestion.person_id:
+        if self.current is not None and _same_face(self.current, suggestion):
             self.current = suggestion
             return False
         self.current = suggestion

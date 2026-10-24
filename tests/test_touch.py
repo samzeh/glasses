@@ -93,8 +93,8 @@ def test_headless_terminal_poll_does_not_block() -> None:
 
 def test_review_applies_choice_once_to_current_suggestion() -> None:
     review = SuggestionReview()
-    dan = Suggestion("dan", "Dan", 0.38)
-    sam = Suggestion("sam", "Sam", 0.39)
+    dan = Suggestion("dan", "Dan", 0.38, (0, 0, 100, 100))
+    sam = Suggestion("sam", "Sam", 0.39, (0, 0, 100, 100))
 
     assert review.apply(Action.ACCEPT) is None
     assert review.observe(dan)
@@ -102,8 +102,13 @@ def test_review_applies_choice_once_to_current_suggestion() -> None:
     assert review.apply(Action.ACCEPT) is ReviewState.ACCEPTED
     assert review.label == "confirmed Dan (this session)"
     assert review.apply(Action.REJECT) is None
-    assert not review.observe(Suggestion("dan", "Dan", 0.40))
+    assert not review.observe(Suggestion("dan", "Dan", 0.40, (5, 5, 105, 105)))
     assert review.state is ReviewState.ACCEPTED
+
+    # A different visible face can have the same suggested identity. Its
+    # decision must not be inherited from the earlier face.
+    assert review.observe(Suggestion("dan", "Dan", 0.39, (250, 0, 350, 100)))
+    assert review.state is ReviewState.PENDING
 
     assert review.observe(sam)
     assert review.apply(Action.REJECT) is ReviewState.REJECTED

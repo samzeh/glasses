@@ -382,6 +382,12 @@ def cmd_watch(args: argparse.Namespace) -> int:
                     person_id=match.person_id,
                     name=store.name_of(match.person_id) or match.person_id,
                     similarity=match.similarity,
+                    bounds=(
+                        primary.detection.bbox.x1,
+                        primary.detection.bbox.y1,
+                        primary.detection.bbox.x2,
+                        primary.detection.bbox.y2,
+                    ),
                 )
             if review.observe(suggestion):
                 print(f"suggestion: possibly {suggestion.name} ({suggestion.similarity:.3f})")

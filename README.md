@@ -156,6 +156,9 @@ protocol; no ESP sensor or pin mapping is assumed here. If ESP input is
 selected and unavailable, capture fails rather than silently using the laptop.
 For `meet`, the first arriving audio chunk anchors the ESP clock to the host
 clock, so its face/audio alignment should be calibrated on the actual device.
+An ESP long tap stops `meet` capture and lets it process the audio collected so
+far; single and double taps do not affect `meet` because it has no pending
+suggestion. Firmware handles device sleep or power control.
 
 The second identity channel, plus transcription on top of it. Speech-to-text
 alone cannot do this: an STT API transcribes sound, it does not track people
