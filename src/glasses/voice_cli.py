@@ -22,7 +22,7 @@ from .voice import (
     VoicePipelineConfig,
     WeSpeakerEmbedder,
 )
-from .voice.audio import load_audio
+from .voice.audio import load_audio, write_wav
 from .voice.models import ensure_all, weights_digest
 
 AUDIO_SUFFIXES = {".wav", ".wave", ".mp3", ".m4a", ".flac", ".aiff", ".aif", ".ogg", ".opus"}
@@ -97,21 +97,52 @@ def cmd_voice_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _prompt_for(name: str, seconds: int, *, wearer: bool) -> None:
+    who = "you" if wearer else name
+    print(
+        f"Recording {seconds}s of {who}.\n"
+        "Talk continuously and naturally — read something aloud if it is "
+        "easier. Pauses are fine, but the gate needs 3+ second stretches, so "
+        "do not stop and start.\n"
+    )
+
+
 def cmd_enroll_voice(args: argparse.Namespace) -> int:
+    if bool(args.mic) == bool(args.audio):
+        print(
+            "Give either --mic (record now) or audio paths, not both and not neither.",
+            file=sys.stderr,
+        )
+        return 1
+
     store = LocalStore.load(args.store)
     pipeline = build_voice_pipeline(store, diarize=args.diarize)
 
     existing = store.find_by_name(args.name)
     person_id = existing.id if existing else None
 
-    embeddings, scores, sources = [], [], []
+    if args.mic:
+        from .voice.capture import record_with_meter
+
+        _prompt_for(args.name, args.seconds, wearer=args.wearer)
+        samples = record_with_meter(args.seconds, device=args.device)
+        if args.save:
+            write_wav(args.save, samples)
+            print(f"  saved {args.save}")
+        return _enroll_from(args, store, pipeline, [("microphone", samples)], person_id)
+
+    recordings = []
     for path in expand_audio(args.audio):
         try:
-            samples = load_audio(path)
+            recordings.append((path.name, load_audio(path)))
         except Exception as error:  # noqa: BLE001
             print(f"  ! {path.name}: {error}", file=sys.stderr)
-            continue
+    return _enroll_from(args, store, pipeline, recordings, person_id)
 
+
+def _enroll_from(args, store, pipeline, recordings, person_id):  # type: ignore[no-untyped-def]
+    embeddings, scores, sources = [], [], []
+    for label, samples in recordings:
         result = pipeline.process(samples)
         kept = 0
         for item in result.segments:
@@ -120,10 +151,10 @@ def cmd_enroll_voice(args: argparse.Namespace) -> int:
             if args.wearer or not item.is_wearer:
                 embeddings.append(item.embedding)
                 scores.append(item.quality.score)
-                sources.append(f"{path.name}@{item.segment.start_s:.1f}s")
+                sources.append(f"{label}@{item.segment.start_s:.1f}s")
                 kept += 1
         print(
-            f"  {path.name}: {len(result.segments)} segments, {kept} usable "
+            f"  {label}: {len(result.segments)} segments, {kept} usable "
             f"({result.speech_s:.0f}s speech of {result.audio_duration_s:.0f}s)"
         )
         for item in result.segments:
@@ -275,7 +306,13 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
         "people's profiles",
     )
     enroll.add_argument("--diarize", action="store_true", help="recording has several voices")
-    enroll.add_argument("audio", nargs="+")
+    enroll.add_argument(
+        "--mic", action="store_true", help="record from the microphone now, no files needed"
+    )
+    enroll.add_argument("--seconds", type=int, default=20, help="how long to record (default 20)")
+    enroll.add_argument("--device", type=int, default=None, help="input device index")
+    enroll.add_argument("--save", help="also write the recording to this WAV")
+    enroll.add_argument("audio", nargs="*")
     enroll.set_defaults(func=cmd_enroll_voice)
 
     identify = subparsers.add_parser("identify-voice", help="who is speaking in a recording")

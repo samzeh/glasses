@@ -272,3 +272,22 @@ def test_stereo_is_mixed_down(tmp_path):
 
     assert samples.ndim == 1
     assert samples.size == SAMPLE_RATE
+
+
+# --- the level meter ------------------------------------------------------
+
+
+def test_the_meter_spans_sixty_db():
+    from glasses.voice.capture import meter_bar
+
+    assert meter_bar(-60.0, width=10) == "." * 10
+    assert meter_bar(0.0, width=10) == "|" * 10
+    assert meter_bar(-30.0, width=10).count("|") == 5
+
+
+def test_the_meter_clamps_rather_than_overflowing():
+    """Silence reads below -60 and a clipped block can read above 0."""
+    from glasses.voice.capture import meter_bar
+
+    assert len(meter_bar(-120.0, width=8)) == 8
+    assert len(meter_bar(6.0, width=8)) == 8

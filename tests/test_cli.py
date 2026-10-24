@@ -36,6 +36,12 @@ def test_every_subcommand_parses():
         ("forget", "Dan"),
         ("calibrate-pose", "dir/"),
         ("bench", "a.jpg"),
+        ("voice-check",),
+        ("enroll-voice", "--name", "Dan", "--consent", "yes", "--mic"),
+        ("enroll-voice", "--name", "Dan", "--consent", "yes", "a.wav"),
+        ("identify-voice", "--diarize", "--speakers", "2", "a.wav"),
+        ("voice-compare", "a.wav", "b.wav"),
+        ("voice-eval", "recordings/"),
     ):
         assert parse(*argv).command == argv[0]
 
@@ -60,6 +66,24 @@ def test_enroll_without_a_source_is_refused(capsys):
 def test_enroll_with_both_sources_is_refused(capsys):
     argv = parse("enroll", "--name", "D", "--consent", "y", "--camera", "0", "a.jpg")
     assert cmd_enroll(argv) == 1
+    assert "not both" in capsys.readouterr().err
+
+
+def test_enroll_voice_without_a_source_is_refused(capsys):
+    from glasses.cli import build_parser as bp
+    from glasses.voice_cli import cmd_enroll_voice
+
+    argv = bp().parse_args(["enroll-voice", "--name", "D", "--consent", "y"])
+    assert cmd_enroll_voice(argv) == 1
+    assert "either --mic" in capsys.readouterr().err
+
+
+def test_enroll_voice_with_both_sources_is_refused(capsys):
+    from glasses.cli import build_parser as bp
+    from glasses.voice_cli import cmd_enroll_voice
+
+    argv = bp().parse_args(["enroll-voice", "--name", "D", "--consent", "y", "--mic", "a.wav"])
+    assert cmd_enroll_voice(argv) == 1
     assert "not both" in capsys.readouterr().err
 
 

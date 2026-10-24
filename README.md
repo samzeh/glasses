@@ -113,11 +113,19 @@ API does. They transcribe sound; they do not track people across recordings.
 Pair it with whatever STT you like.
 
 ```sh
-glasses voice-check                                        # fetch models, ~36 MB
-glasses enroll-voice --name "Sam" --consent "myself" --wearer me.wav
-glasses enroll-voice --name "Dan" --consent "asked him" dan/
+uv pip install -e '.[voice]'   # sherpa-onnx + mic capture, ~40 MB
+glasses voice-check            # fetch the models, ~36 MB
+
+# record yourself for 20 seconds — no audio files needed
+glasses enroll-voice --name "Sam" --consent "myself" --wearer --mic
+
+glasses enroll-voice --name "Dan" --consent "asked him" --mic --seconds 30
 glasses identify-voice conversation.wav --diarize --speakers 2
 ```
+
+`--mic` records with a live level meter, so you can see it is hearing you
+rather than discovering it was muted twenty seconds later. `--save out.wav`
+keeps the recording; from files instead, pass paths in place of `--mic`.
 
 **Enroll yourself as `--wearer` first.** Your voice is the loudest thing the
 mic ever hears and is partly bone-conducted, so it is both the easiest to
@@ -156,7 +164,8 @@ That is not a calibration. `voice-eval` does it properly on your voices.
 | `glasses calibrate-pose frames/` | measure `nose_frontal_fraction` for your camera |
 | `glasses bench frames/` | per-stage latency against the budget |
 | `glasses voice-check` | fetch the voice models, report the wearer |
-| `glasses enroll-voice --name N --consent "…" audio/` | add a voice (`--wearer` for yourself) |
+| `glasses enroll-voice --name N --consent "…" --mic` | record a voice now (`--wearer` for yourself) |
+| `glasses enroll-voice --name N --consent "…" audio/` | same, from audio files |
 | `glasses identify-voice audio/` | who is speaking (`--diarize` for several voices) |
 | `glasses voice-compare a.wav b.wav` | pairwise similarity between recordings |
 | `glasses voice-eval recordings/` | calibrate `accept_threshold` on your own voices |
