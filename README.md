@@ -81,7 +81,12 @@ Live webcam with a box round each face and a name above it:
 | amber | saw a face, but the frame failed the quality gate |
 | grey | no face found |
 
-The latency counter is top-left. `q` quits and prints p50/p95.
+The latency counter is top-left. When a face is labelled "possibly X", press
+`a` to confirm or `r` to dismiss that suggestion. The choice changes the
+on-screen label for the current face while it remains in view; it does not
+enroll anyone or change the gallery. `q` quits and prints p50/p95. These laptop
+keys are the default controls. With `--headless`, type a key followed by Return
+in the terminal; Ctrl-C also stops the command.
 
 Or over still images:
 

@@ -25,6 +25,14 @@ from .meet_cli import register as register_meet
 from .search_cli import register as register_search
 from .storage import open_store, store_label
 from .store import LocalStore
+from .touch import (
+    Action,
+    ReviewState,
+    Suggestion,
+    SuggestionReview,
+    TerminalKeyboardSource,
+    WindowKeyboardSource,
+)
 from .voice_cli import register as register_voice
 
 DEFAULT_STORE = Path("glasses-store")
@@ -337,8 +345,10 @@ def cmd_watch(args: argparse.Namespace) -> int:
         )
         return 1
 
-    print("watching — q or ctrl-c to stop")
+    print("watching — a accepts, r rejects, q stops; headless keys need Return")
     latencies: list[float] = []
+    review = SuggestionReview()
+    actions = TerminalKeyboardSource() if args.headless else WindowKeyboardSource(cv2)
     try:
         while True:
             ok, frame = capture.read()
@@ -347,6 +357,18 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
             result = pipeline.process_frame(frame)
             latencies.append(result.timings.total_ms)
+
+            primary = result.primary
+            match = primary.match if primary is not None else None
+            suggestion = None
+            if match is not None and match.status is MatchStatus.LOW_CONFIDENCE and match.person_id:
+                suggestion = Suggestion(
+                    person_id=match.person_id,
+                    name=store.name_of(match.person_id) or match.person_id,
+                    similarity=match.similarity,
+                )
+            if review.observe(suggestion):
+                print(f"suggestion: possibly {suggestion.name} ({suggestion.similarity:.3f})")
 
             for face in result.faces:
                 box = face.detection.bbox
@@ -380,12 +402,27 @@ def cmd_watch(args: argparse.Namespace) -> int:
                 (255, 255, 255),
                 2,
             )
+            if review.label:
+                cv2.putText(
+                    frame,
+                    review.label,
+                    (10, 52),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 200, 200),
+                    2,
+                )
             if not args.headless:
                 cv2.imshow("glasses", frame)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
             elif len(latencies) % 30 == 0:
                 print(f"  {describe_face(result, store)}")
+
+            action = actions.poll()
+            if action is Action.SHUTDOWN:
+                break
+            decision = review.apply(action) if action is not None else None
+            if decision in (ReviewState.ACCEPTED, ReviewState.REJECTED):
+                print(review.label)
     except KeyboardInterrupt:
         pass
     finally:
