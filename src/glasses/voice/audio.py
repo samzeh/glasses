@@ -8,10 +8,12 @@ project's problem.
 
 from __future__ import annotations
 
+import io
 import shutil
 import subprocess
 import wave
 from pathlib import Path
+from typing import IO
 
 import numpy as np
 
@@ -108,13 +110,30 @@ def _decode_with_ffmpeg(path: Path, target_rate: int) -> tuple[np.ndarray, int]:
 
 def write_wav(path: Path | str, samples: np.ndarray, rate: int = SAMPLE_RATE) -> None:
     """16-bit PCM WAV. Used for saving captures and for test fixtures."""
+    with open(path, "wb") as handle:
+        _write_wav(handle, samples, rate)
+
+
+def wav_bytes(samples: np.ndarray, rate: int = SAMPLE_RATE) -> bytes:
+    """The same WAV, in memory.
+
+    A hosted recogniser wants a container rather than bare samples, and a
+    speech segment should not touch the disk on its way to one — there is no
+    temporary file to leak and nothing to clean up after a failed request.
+    """
+    buffer = io.BytesIO()
+    _write_wav(buffer, samples, rate)
+    return buffer.getvalue()
+
+
+def _write_wav(handle: IO[bytes], samples: np.ndarray, rate: int) -> None:
     clipped = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
     pcm = (clipped * 32767.0).astype(np.int16)
-    with wave.open(str(path), "wb") as handle:
-        handle.setnchannels(1)
-        handle.setsampwidth(2)
-        handle.setframerate(rate)
-        handle.writeframes(pcm.tobytes())
+    with wave.open(handle, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(rate)
+        writer.writeframes(pcm.tobytes())
 
 
 def rms_dbfs(samples: np.ndarray) -> float:

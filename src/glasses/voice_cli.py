@@ -16,6 +16,7 @@ import numpy as np
 from .identity.vectors import cosine_similarity
 from .store import LocalStore
 from .voice import (
+    CartesiaError,
     DiarizingSegmenter,
     VadSegmenter,
     VoicePipeline,
@@ -23,6 +24,7 @@ from .voice import (
     WeSpeakerEmbedder,
 )
 from .voice.audio import load_audio, write_wav
+from .voice.cartesia import API_KEY_ENV, DEFAULT_MODEL, has_api_key
 from .voice.models import ensure_all, weights_digest
 
 AUDIO_SUFFIXES = {".wav", ".wave", ".mp3", ".m4a", ".flac", ".aiff", ".aif", ".ogg", ".opus"}
@@ -85,6 +87,16 @@ def cmd_voice_check(args: argparse.Namespace) -> int:
     except Exception as error:  # noqa: BLE001 - this command reports, never raises
         print(f"  unavailable: {error}")
         return 1
+
+    # Reports whether the key is present, never what it is: a demo failing
+    # because nobody exported it should take one command to diagnose.
+    print("\ntranscription")
+    if has_api_key():
+        print(f"  cartesia/{DEFAULT_MODEL}   {API_KEY_ENV} is set")
+    else:
+        print(f"  whisper (local)      {API_KEY_ENV} is not set")
+        print("    Cartesia is the better transcript and the default when a")
+        print(f"    key is present. export {API_KEY_ENV}=… to use it.")
 
     store = LocalStore.load(args.store)
     wearer = store.wearer()
@@ -252,14 +264,39 @@ def _label_of(item, store: LocalStore):  # type: ignore[no-untyped-def]
     return (person_id, name, item.is_wearer)
 
 
+def transcribe_with_fallback(transcriber, segments, labels, *, fallback):  # type: ignore[no-untyped-def]
+    """Transcribe every segment, dropping to ``fallback()`` if the hosted
+    recogniser fails.
+
+    A key that expired overnight should cost transcript quality, not the
+    transcript. The transcriber that actually produced the text comes back
+    with it, so the caller stops paying Cartesia's timeout on a key already
+    known to be dead.
+    """
+    from .voice import transcribe_segments
+
+    try:
+        return transcribe_segments(transcriber, segments, labels=labels), transcriber
+    except CartesiaError as error:
+        local = fallback()
+        print(f"  ! {error}", file=sys.stderr)
+        print(f"  falling back to {local.model_name}", file=sys.stderr)
+        return transcribe_segments(local, segments, labels=labels), local
+
+
 def cmd_transcribe(args: argparse.Namespace) -> int:
     """Who said what. Each speaker segment is transcribed on its own, so the
     attribution needs no timestamp alignment to be exact."""
-    from .voice import WhisperTranscriber, render, transcribe_segments
+    from .voice import WhisperTranscriber, build_transcriber, render
 
     store = LocalStore.load(args.store)
     pipeline = build_voice_pipeline(store, diarize=args.diarize, num_speakers=args.speakers)
-    transcriber = WhisperTranscriber(args.model)
+    transcriber = build_transcriber(
+        local_model=args.model,
+        language=args.language,
+        local_only=args.local,
+    )
+    print(f"transcribing with {transcriber.model_name}")
 
     if args.mic:
         from .voice.capture import record_with_meter
@@ -275,10 +312,11 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
     for label, samples in recordings:
         result = pipeline.process(samples)
         usable = [i for i in result.segments if i.embedding is not None]
-        utterances = transcribe_segments(
+        utterances, transcriber = transcribe_with_fallback(
             transcriber,
             [i.segment for i in usable],
-            labels=[_label_of(i, store) for i in usable],
+            [_label_of(i, store) for i in usable],
+            fallback=lambda: WhisperTranscriber(args.model),
         )
         print(f"--- {label} ---")
         print(render(utterances) if utterances else "  (nothing intelligible)")
@@ -440,7 +478,17 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     transcribe = subparsers.add_parser("transcribe", help="who said what, attributed")
     transcribe.add_argument("--diarize", action="store_true", help="split by speaker first")
     transcribe.add_argument("--speakers", type=int, default=-1, help="pin the speaker count")
-    transcribe.add_argument("--model", default="base.en", help="whisper size (default base.en)")
+    transcribe.add_argument(
+        "--local",
+        action="store_true",
+        help="use the local Whisper instead of Cartesia, even with a key set",
+    )
+    transcribe.add_argument(
+        "--language", default="en", help="ISO-639-1 language for Cartesia (default en)"
+    )
+    transcribe.add_argument(
+        "--model", default="base.en", help="whisper size for the local path (default base.en)"
+    )
     transcribe.add_argument("--mic", action="store_true", help="listen on the microphone now")
     transcribe.add_argument("--seconds", type=int, default=20, help="how long to listen")
     transcribe.add_argument("--device", type=int, default=None, help="input device index")
