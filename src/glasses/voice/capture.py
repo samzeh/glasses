@@ -52,12 +52,25 @@ def record(
     device: int | None = None,
     on_block: Callable[[float, float], None] | None = None,
     block_s: float = 0.1,
+    source: str = "laptop",
+    esp_port: str | None = None,
 ) -> np.ndarray:
-    """Capture mono 16 kHz float32 from the microphone.
+    """Capture mono 16 kHz float32 from the laptop or selected ESP.
 
     ``on_block`` is called with ``(elapsed_s, level_dbfs)`` as it goes, which
     is what drives the meter.
     """
+    if source == "esp":
+        if device is not None:
+            raise ValueError("--device selects a laptop input; use --esp-port for ESP audio")
+        if not esp_port:
+            raise ValueError("ESP audio needs --esp-port")
+        return _record_esp(seconds, esp_port, on_block=on_block)
+    if source != "laptop":
+        raise ValueError(f"unknown audio source: {source}")
+    if esp_port:
+        raise ValueError("--esp-port requires --audio-source esp")
+
     sounddevice = _require_sounddevice()
     block = int(SAMPLE_RATE * block_s)
     collected: list[np.ndarray] = []
@@ -81,12 +94,44 @@ def record(
     return np.concatenate(collected) if collected else np.zeros(0, dtype=np.float32)
 
 
+def _record_esp(
+    seconds: float,
+    port: str,
+    *,
+    on_block: Callable[[float, float], None] | None = None,
+) -> np.ndarray:
+    from ..device import AudioFrame, EspSerialStream
+
+    target = int(seconds * SAMPLE_RATE)
+    if target <= 0:
+        raise ValueError("recording duration must be positive")
+    collected: list[np.ndarray] = []
+    count = 0
+    last_audio = time.monotonic()
+    with EspSerialStream(port) as stream:
+        while count < target:
+            event = stream.read()
+            if not isinstance(event, AudioFrame):
+                if time.monotonic() - last_audio >= 3.0:
+                    raise ConnectionError("no ESP audio received for 3 seconds")
+                continue
+            last_audio = time.monotonic()
+            chunk = event.samples[: target - count]
+            collected.append(chunk)
+            count += chunk.size
+            if on_block is not None:
+                on_block(count / SAMPLE_RATE, rms_dbfs(chunk))
+    return np.concatenate(collected)
+
+
 def record_with_meter(
     seconds: float,
     *,
     device: int | None = None,
     countdown: int = 3,
     stream=sys.stdout,  # type: ignore[no-untyped-def]
+    source: str = "laptop",
+    esp_port: str | None = None,
 ) -> np.ndarray:
     """Record, showing a countdown and a live level meter."""
     for remaining in range(countdown, 0, -1):
@@ -102,7 +147,7 @@ def record_with_meter(
         stream.write(f"\r  {seconds - elapsed:4.1f}s left  [{meter_bar(level)}] {level:6.1f} dBFS ")
         stream.flush()
 
-    samples = record(seconds, device=device, on_block=show)
+    samples = record(seconds, device=device, on_block=show, source=source, esp_port=esp_port)
     stream.write("\r" + " " * 70 + "\r")
     stream.flush()
 
