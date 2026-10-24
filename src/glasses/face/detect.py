@@ -12,6 +12,7 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 from .config import DetectConfig
+from .models import DETECTOR_FILE, load_net, pack_dir
 from .types import BBox, Detection, Landmarks5
 
 
@@ -27,6 +28,10 @@ class ScrfdDetector:
 
     Kept behind the same Protocol as everything else so swapping in
     YOLOv8-face is a constructor change, not a pipeline change.
+
+    The model loads on first ``detect`` rather than in ``__init__``, so
+    constructing a pipeline is free and the ~1 s of ONNX session setup lands
+    somewhere you can see it.
     """
 
     def __init__(
@@ -41,36 +46,41 @@ class ScrfdDetector:
         self.model_pack = model_pack
         self._det_size = det_size
         self._providers = providers or ["CPUExecutionProvider"]
-        self._app = None
+        self._net = None
 
     def _ensure_loaded(self):  # type: ignore[no-untyped-def]
-        if self._app is None:
-            from insightface.app import FaceAnalysis
-
-            app = FaceAnalysis(
-                name=self.model_pack,
-                allowed_modules=["detection"],
+        if self._net is None:
+            self._net = load_net(
+                pack_dir(self.model_pack) / DETECTOR_FILE,
                 providers=self._providers,
+                input_size=self._det_size,
+                det_thresh=self.config.min_detector_score,
             )
-            app.prepare(ctx_id=0, det_size=self._det_size)
-            self._app = app
-        return self._app
+        return self._net
 
     def detect(self, frame: np.ndarray) -> list[Detection]:
-        app = self._ensure_loaded()
-        detections: list[Detection] = []
-        for face in app.get(frame):
-            score = float(face.det_score)
-            if score < self.config.min_detector_score:
-                continue
-            x1, y1, x2, y2 = (float(v) for v in face.bbox)
-            detections.append(
-                Detection(
-                    bbox=BBox(x1, y1, x2, y2),
-                    landmarks=Landmarks5.from_array(np.asarray(face.kps)),
-                    score=score,
-                )
+        net = self._ensure_loaded()
+        boxes, landmarks = net.detect(frame, max_num=0)
+
+        if boxes is None or len(boxes) == 0:
+            return []
+        if landmarks is None:
+            # Alignment is non-negotiable, so a detector that cannot produce
+            # the 5 points is unusable here rather than degraded.
+            raise RuntimeError(
+                f"{self.model_pack}/{DETECTOR_FILE} returned no landmarks; "
+                "the pipeline cannot align without them"
             )
+
+        detections = [
+            Detection(
+                bbox=BBox(*(float(v) for v in box[:4])),
+                landmarks=Landmarks5.from_array(np.asarray(kps)),
+                score=float(box[4]),
+            )
+            for box, kps in zip(np.asarray(boxes), np.asarray(landmarks), strict=True)
+            if float(box[4]) >= self.config.min_detector_score
+        ]
         detections.sort(key=lambda d: d.score, reverse=True)
         return detections
 

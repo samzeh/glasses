@@ -19,6 +19,9 @@ db = [
     "pgvector>=0.2.5",
 ]
 
+[project.scripts]
+glasses = "glasses.cli:main"
+
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
 

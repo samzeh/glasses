@@ -12,10 +12,12 @@ recognition collapses in a way that looks like a threshold problem.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import numpy as np
 
+from .models import RECOGNITION_FILE, load_net, pack_dir, weights_digest
 from .types import AlignedFace, Embedding
 
 
@@ -46,10 +48,9 @@ def l2_normalize(vector: np.ndarray) -> np.ndarray:
 class ArcFaceEmbedder:
     """InsightFace recognition model, loaded lazily.
 
-    ``model_version`` defaults to the insightface package version. That is a
-    coarse proxy for "which weights produced this vector", but it is honest and
-    it changes when the weights plausibly do; pin it explicitly if you vendor
-    the ONNX file.
+    ``model_version`` is a digest of the weights file, not the insightface
+    package version — see ``models.weights_digest`` for why. Pass it
+    explicitly only if you are reproducing an existing gallery.
     """
 
     def __init__(
@@ -71,38 +72,32 @@ class ArcFaceEmbedder:
     @property
     def model_version(self) -> str:
         if self._model_version is None:
-            import insightface
-
-            self._model_version = str(insightface.__version__)
+            self._model_version = weights_digest(str(self._weights_path()))
         return self._model_version
 
     @property
     def dim(self) -> int:
         return 512
 
+    def _weights_path(self) -> Path:
+        return pack_dir(self._model_pack) / RECOGNITION_FILE
+
     def _ensure_loaded(self):  # type: ignore[no-untyped-def]
         if self._model is None:
-            from insightface.app import FaceAnalysis
-
-            app = FaceAnalysis(
-                name=self._model_pack,
-                allowed_modules=["recognition"],
-                providers=self._providers,
-            )
-            app.prepare(ctx_id=0)
-            self._model = app.models["recognition"]
+            self._model = load_net(self._weights_path(), providers=self._providers)
         return self._model
 
     def embed_batch(self, faces: list[AlignedFace]) -> list[Embedding]:
         if not faces:
             return []
         model = self._ensure_loaded()
-        batch = np.stack([f.image for f in faces])
-        vectors = model.get_feat(batch)
+        # get_feat takes a list of HxWx3 crops, not a stacked array: it hands
+        # them to cv2.dnn.blobFromImages, which rejects a 4-D input.
+        vectors = np.asarray(model.get_feat([f.image for f in faces]))
         name, version = self.model_name, self.model_version
         return [
             Embedding(vector=l2_normalize(v), model_name=name, model_version=version)
-            for v in np.asarray(vectors)
+            for v in vectors
         ]
 
 

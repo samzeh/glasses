@@ -5,8 +5,36 @@ import math
 import numpy as np
 import pytest
 
-from glasses.face.config import ARCFACE_REFERENCE_112
+from glasses.face.config import ARCFACE_REFERENCE_112, QualityConfig
 from glasses.face.types import BBox, Detection, Landmarks5
+
+
+def _scaled_reference(interocular: float) -> np.ndarray:
+    """The ArcFace canonical 5 points, scaled, centred on the eye midpoint."""
+    reference = np.array(ARCFACE_REFERENCE_112, dtype=np.float64)
+    reference_interocular = reference[1, 0] - reference[0, 0]
+    return (reference - (reference[0] + reference[1]) / 2.0) * (interocular / reference_interocular)
+
+
+def _place(points: np.ndarray, roll_deg: float, center: tuple[float, float]) -> Landmarks5:
+    theta = math.radians(roll_deg)
+    rotation = np.array([[math.cos(theta), -math.sin(theta)], [math.sin(theta), math.cos(theta)]])
+    return Landmarks5.from_array(points @ rotation.T + np.asarray(center))
+
+
+def make_canonical_landmarks(
+    *,
+    center: tuple[float, float] = (400.0, 300.0),
+    interocular: float = 60.0,
+    roll_deg: float = 0.0,
+) -> Landmarks5:
+    """Exactly the ArcFace reference, scaled, rolled and translated.
+
+    This is the aligner's target, so aligning it must recover the reference to
+    numerical precision. It is *not* the shape a detector emits — see
+    ``make_landmarks``.
+    """
+    return _place(_scaled_reference(interocular), roll_deg, center)
 
 
 def make_landmarks(
@@ -17,29 +45,25 @@ def make_landmarks(
     yaw_offset: float = 0.0,
     nose_fraction: float | None = None,
 ) -> Landmarks5:
-    """A synthetic face, built from the canonical ArcFace reference itself.
+    """A synthetic face shaped like the *detector's* output, not the aligner's
+    template.
 
-    With the defaults it is that reference, scaled and translated — so it is
-    frontal by the same definition the aligner uses, and alignment should
-    recover it to numerical precision. ``yaw_offset`` displaces the nose
-    horizontally and ``nose_fraction`` overrides its height, which is how the
-    pose tests induce a turn or a tip.
+    The two disagree about the nose: the ArcFace reference puts it at 0.495 of
+    the eye-to-mouth distance, SCRFD at about 0.66. ``head_pose`` consumes
+    detector landmarks, so a fixture for it has to use the detector's
+    convention — which means defaulting to whatever ``QualityConfig`` is
+    currently calibrated to, so these tests follow the constant rather than
+    pinning a stale copy of it.
+
+    ``yaw_offset`` displaces the nose horizontally and ``nose_fraction``
+    overrides its height, which is how the pose tests induce a turn or a tip.
     """
-    reference = np.array(ARCFACE_REFERENCE_112, dtype=np.float64)
-    reference_interocular = reference[1, 0] - reference[0, 0]
-    points = (reference - (reference[0] + reference[1]) / 2.0) * (
-        interocular / reference_interocular
-    )
-
-    if nose_fraction is not None:
-        eye_to_mouth = (points[3, 1] + points[4, 1]) / 2.0
-        points[2, 1] = nose_fraction * eye_to_mouth
+    points = _scaled_reference(interocular)
+    if nose_fraction is None:
+        nose_fraction = QualityConfig().nose_frontal_fraction
+    points[2, 1] = nose_fraction * (points[3, 1] + points[4, 1]) / 2.0
     points[2, 0] += yaw_offset
-
-    theta = math.radians(roll_deg)
-    rotation = np.array([[math.cos(theta), -math.sin(theta)], [math.sin(theta), math.cos(theta)]])
-    points = points @ rotation.T + np.asarray(center)
-    return Landmarks5.from_array(points)
+    return _place(points, roll_deg, center)
 
 
 def make_detection(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from glasses.face.config import QualityConfig
+from glasses.face.config import ARCFACE_REFERENCE_112, QualityConfig
 from glasses.face.quality import assess, head_pose, laplacian_variance, to_grayscale
 
 from .conftest import make_detection, make_landmarks, make_textured_frame
@@ -98,6 +98,28 @@ def test_pitch_responds_to_the_nose_sitting_low():
 
     assert abs(level.pitch) < 1.0
     assert tipped_more.pitch > tipped.pitch > level.pitch
+
+
+def test_the_pose_zero_point_follows_the_detector_not_the_aligner_template():
+    """Regression guard.
+
+    ``nose_frontal_fraction`` was briefly derived from the ArcFace canonical
+    reference, which puts the nose at 0.495 of the eye-to-mouth distance. That
+    looked principled and was wrong: SCRFD places its nose keypoint near 0.66,
+    so near-frontal faces read as pitched down by 45 degrees and the gate threw
+    them away. The constant belongs to whatever produces the landmarks.
+    """
+    reference = np.array(ARCFACE_REFERENCE_112)
+    eye_mid = (reference[0] + reference[1]) / 2.0
+    mouth_mid = (reference[3] + reference[4]) / 2.0
+    template_fraction = (reference[2, 1] - eye_mid[1]) / (mouth_mid[1] - eye_mid[1])
+
+    assert template_fraction == pytest.approx(0.495, abs=0.005)
+    assert QualityConfig().nose_frontal_fraction > template_fraction + 0.1
+
+    # A face carrying the template's nose placement is not frontal to the
+    # estimator, and that is the correct reading of a real detector's output.
+    assert head_pose(make_landmarks(nose_fraction=template_fraction)).pitch < -15.0
 
 
 # --- the gate --------------------------------------------------------------

@@ -17,3 +17,6 @@ models/
 *.jpeg
 *.png
 *.wav
+
+# local M0 gallery
+glasses-store/

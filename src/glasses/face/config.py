@@ -36,17 +36,29 @@ class QualityConfig:
     #: placeholder from webcam-grade imagery.
     min_blur_variance: float = 60.0
     max_abs_yaw_deg: float = 30.0
+    #: The term most likely to over-reject. Per-person face proportions move
+    #: the pitch estimate by roughly +/-12 degrees on their own, so a third of
+    #: this budget is spent on face shape rather than head angle. If the gate
+    #: pass rate comes out low and ``pitch`` dominates the failures, suspect
+    #: this before the camera.
     max_abs_pitch_deg: float = 30.0
     min_mean_luminance: float = 40.0
     max_mean_luminance: float = 220.0
 
     #: Where the nose sits between the eye line and the mouth line on a frontal
-    #: face, as a fraction of the eye-to-mouth distance. Not a guess: it is the
-    #: value implied by the ArcFace canonical reference above, which is the
-    #: definition of frontal that the rest of the pipeline already uses.
-    #: Re-derive it if the reference changes; CALIBRATE if real faces turn out
-    #: to sit systematically off it.
-    nose_frontal_fraction: float = 0.4950
+    #: face, as a fraction of the eye-to-mouth distance.
+    #:
+    #: CALIBRATE, and more urgently than the rest. Deriving this from the
+    #: ArcFace canonical reference gives 0.495 and is wrong in practice: SCRFD
+    #: puts its nose keypoint markedly lower, around 0.66 on real detections,
+    #: so a reference-derived constant reads near-frontal faces as pitched
+    #: down by 45 degrees and the pitch gate throws them away.
+    #:
+    #: The value below is the median over 6 detected faces — far too small a
+    #: sample to trust. Run ``glasses calibrate-pose`` on your own frames and
+    #: replace it. The constant belongs to whichever detector produces the
+    #: landmarks, so it must be re-measured if SCRFD is swapped out.
+    nose_frontal_fraction: float = 0.66
     #: How far that fraction travels over a quarter turn of pitch. Sets the
     #: scale of the pitch estimate. CALIBRATE.
     nose_pitch_span: float = 0.50

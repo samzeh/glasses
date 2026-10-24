@@ -12,7 +12,7 @@ from glasses.face.align import (
     reference_landmarks,
 )
 
-from .conftest import make_landmarks, make_textured_frame
+from .conftest import make_canonical_landmarks, make_landmarks, make_textured_frame
 
 
 def test_transform_recovers_a_known_similarity():
@@ -38,7 +38,7 @@ def test_transform_never_reflects():
 
 
 def test_landmarks_land_on_the_canonical_reference():
-    landmarks = make_landmarks(center=(410.0, 290.0), interocular=72.0, roll_deg=12.0)
+    landmarks = make_canonical_landmarks(center=(410.0, 290.0), interocular=72.0, roll_deg=12.0)
 
     transform = estimate_similarity_transform(landmarks.as_array(), reference_landmarks(112))
     mapped = apply_transform(transform, landmarks.as_array())
@@ -51,7 +51,7 @@ def test_landmarks_land_on_the_canonical_reference():
 def test_alignment_removes_roll():
     """Roll is the component alignment must fully cancel: the eye line should
     come out horizontal whatever angle the head was at."""
-    rolled = make_landmarks(roll_deg=25.0)
+    rolled = make_canonical_landmarks(roll_deg=25.0)
 
     transform = estimate_similarity_transform(rolled.as_array(), reference_landmarks(112))
     mapped = apply_transform(transform, rolled.as_array())

@@ -23,11 +23,14 @@ src/glasses/
     gallery.py     ---                in-memory and pgvector backends
     match.py       5. match           cosine, mean of a person's top 3
                    6. resolve         match / low confidence / unknown
+    models.py      loading ONNX nets, and digesting the weights
     pipeline.py    the six, wired, with per-stage timings
   evaluation/
     verification.py  TAR at a fixed FAR, swept over gallery size
   db/
     schema.sql     the full data model, not only the face tables
+  store.py       file-backed people + templates, for M0
+  cli.py         glasses check / enroll / identify / watch / bench
 ```
 
 Everything holding real logic runs on numpy alone. Only `detect.py` and
@@ -37,23 +40,67 @@ without downloading anything.
 ## Running it
 
 ```sh
-uv venv && uv pip install -e . --group dev
-.venv/bin/python -m pytest
+uv venv
+uv pip install -e '.[face]'      # models; ~400 MB of wheels
+glasses check                    # downloads buffalo_l on first run, ~280 MB
 ```
 
-With the models, for real frames:
+`check` prints the dependency versions, the weights digests, and what is in
+the store. If it is clean, everything below works.
 
 ```sh
-uv pip install -e '.[face,db]'
+# enroll yourself from a handful of photos
+glasses enroll --name "Sam" --consent "me, 2026-10-23" photos/sam/
+
+# run the pipeline over images
+glasses identify photos/test/
+
+# live from the webcam — the closest thing to wearing the device
+glasses watch
+
+glasses people                   # who is enrolled, and their consent record
+glasses forget "Sam"             # delete a person and all their data
+glasses calibrate-pose frames/   # measure nose_frontal_fraction
+glasses bench frames/            # per-stage latency against the budget
 ```
+
+`--consent` is required on `enroll`, and the note is stored with the person.
+The store is a directory (`glasses-store/` by default, `--store` to move it):
+an `.npz` of vectors beside a JSON index. Delete it to start over.
+
+As a library:
 
 ```python
 from glasses.face import ArcFaceEmbedder, FacePipeline, InMemoryGallery, ScrfdDetector
 
 pipeline = FacePipeline(ScrfdDetector(), ArcFaceEmbedder(), InMemoryGallery())
-result = pipeline.process_frame(frame)          # one frame
-index, result = pipeline.best_frame(burst)      # pick the best of a burst
+result = pipeline.process_frame(frame)  # one frame
+index, result = pipeline.best_frame(burst)  # pick the best of a burst
 ```
+
+Tests need none of that — numpy alone:
+
+```sh
+uv pip install -e . --group dev && .venv/bin/python -m pytest
+```
+
+## Measured latency
+
+Apple Silicon CPU, 1280×886 frame, 6 faces detected, 2 through the gate:
+
+| stage | p50 | budget |
+|---|---|---|
+| detect | 44 ms | |
+| align | 0.6 ms | |
+| quality gate | 1.1 ms | |
+| embed (2 faces) | 149 ms | |
+| match | 0.1 ms | 50 ms |
+| **total** | **192 ms** | **400 ms** |
+
+Cold start adds ~500 ms of ONNX session setup, once per process. The budget is
+the PRD's server-side share; upload and render are not included. There is
+roughly 2× headroom, so speed is not currently the constraint — accuracy on
+real ESP frames is.
 
 ## Three things that are load-bearing
 
@@ -82,9 +129,22 @@ transfer to an OV2640 behind a plastic lens. In particular
 `min_blur_variance = 60.0` is a placeholder from webcam-grade imagery and
 `accept_threshold = 0.40` is the PRD's starting value, not a measured one.
 
-`nose_frontal_fraction` is the exception — it is derived from the ArcFace
-canonical reference rather than guessed, since that reference is already the
-pipeline's definition of frontal.
+`nose_frontal_fraction` is the one to fix first, and it has already bitten
+once. Deriving it from the ArcFace canonical reference gives 0.495 and looks
+principled — that reference *is* the aligner's definition of frontal. It is
+still wrong, because the constant belongs to whatever produces the landmarks,
+and SCRFD puts its nose keypoint near 0.66. With 0.495 the estimator read
+near-frontal faces as pitched down 45°, and the pitch gate threw them away.
+
+Measure it on your own frames before trusting it:
+
+```sh
+glasses calibrate-pose path/to/frames/     # use 50+ roughly frontal faces
+```
+
+That also reports how much apparent pitch comes from face shape alone. On the
+tiny sample available here it is ±20°, which is most of the ±30° gate — so if
+`pitch` dominates your rejections, suspect this term before the camera.
 
 Calibrating needs a held-out set of a few hundred frames from the real glasses
 camera across real conditions, labelled by person. `glasses.evaluation` sweeps
@@ -96,9 +156,10 @@ will not notice without the chart.
 
 ## Known gaps
 
-- Yaw and pitch come from a landmark heuristic with two constants that need
-  calibrating. A weak-perspective PnP solve against a canonical 3D 5-point
+- Yaw and pitch come from a landmark heuristic whose constants are calibrated
+  on 6 faces. A weak-perspective PnP solve against a canonical 3D 5-point
   model is the principled upgrade, once there is a held-out set to score it on.
+- `watch` has been exercised on still images but not on a live camera here.
 - `PgVectorGallery` is written but untested — it needs a Postgres with
   pgvector to test against.
 - No anti-spoofing and no re-identification across clothing changes. Both are
