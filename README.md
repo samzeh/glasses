@@ -99,10 +99,11 @@ The ESP sends `single` to accept, `double` to dismiss, and `long` to stop
 `watch`. In ESP mode, laptop keys do not make decisions. `watch` reads touch
 events on the shared audio/touch serial protocol described below; this
 face-only command ignores audio frames. Firmware must handle any device sleep
-or power circuitry after a long tap.
-The current `arduino_smart_glasses.ino/test_arduino.ino` sketch still emits
-`CAM_ON`, `CAM_OFF`, and `SNAPSHOT` at 115200 baud. It needs a firmware update
-to emit the versioned JSON gestures before `--input-source esp` can work.
+or power circuitry after a long tap. Flash the updated
+`arduino_smart_glasses.ino/test_arduino.ino` sketch: it reads touch pin 4 and
+emits the JSON gestures at 921600 baud. It also sends the older `CAM_ON`,
+`CAM_OFF`, and `SNAPSHOT` lines for `vision_hub.py`; the new Python reader
+ignores those lines. Only one process can open the serial port at a time.
 
 Or over still images:
 
@@ -154,9 +155,10 @@ The ESP sends newline-terminated JSON at 921600 baud. Each message has
 `pcm16` is base64 of little-endian signed 16-bit mono PCM. Keep audio chunks
 near 100 ms. A touch message on the same serial link uses
 `{"v":1,"type":"touch","t_us":123,"gesture":"single"}` with `single`,
-`double`, or `long` as the gesture. The firmware needs to implement this
-protocol; no ESP sensor or pin mapping is assumed here. If ESP input is
-selected and unavailable, capture fails rather than silently using the laptop.
+`double`, or `long` as the gesture. The sketch in this repo implements touch
+messages but does not yet send microphone audio; ESP audio capture still needs
+microphone firmware. If ESP input is selected and unavailable, capture fails
+rather than silently using the laptop.
 For `meet`, the first arriving audio chunk anchors the ESP clock to the host
 clock, so its face/audio alignment should be calibrated on the actual device.
 An ESP long tap stops `meet` capture and lets it process the audio collected so

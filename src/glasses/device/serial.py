@@ -21,6 +21,7 @@ from ..voice.config import SAMPLE_RATE
 
 MAX_LINE_BYTES = 65_536
 BAUD_RATE = 921_600
+LEGACY_NOTIFICATIONS = {b"CAM_ON", b"CAM_OFF", b"SNAPSHOT"}
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,11 @@ class EspSerialStream:
             if end >= 0:
                 line = bytes(self._pending[: end + 1])
                 del self._pending[: end + 1]
+                if line.strip() in LEGACY_NOTIFICATIONS:
+                    # The current Arduino sketch also emits these for the
+                    # older vision_hub.py process. The JSON touch event is
+                    # already on the same link and is the one we consume.
+                    return None
                 return parse_message(line)
             if len(self._pending) > MAX_LINE_BYTES:
                 raise ValueError("ESP message is too long")

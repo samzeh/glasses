@@ -12,7 +12,7 @@ from glasses.store import LocalStore
 from glasses.voice import VadSegmenter, VoicePipeline, WeSpeakerEmbedder
 
 SERIAL_PORT = 'COM5'
-BAUD_RATE = 115200
+BAUD_RATE = 921600
 
 print("Loading Face and Voice machine learning models...")
 store = LocalStore.load("glasses-store")
