@@ -77,6 +77,7 @@ CREATE TABLE face_template (
     model_name          text NOT NULL,
     model_version       text NOT NULL,
     quality_score       real NOT NULL,
+    source              text NOT NULL DEFAULT '',
     source_encounter_id uuid REFERENCES encounter (id) ON DELETE SET NULL,
     created_at          timestamptz NOT NULL DEFAULT now(),
     deleted_at          timestamptz
@@ -98,14 +99,16 @@ CREATE TABLE voice_template (
     model_name          text NOT NULL,
     model_version       text NOT NULL,
     source_encounter_id uuid REFERENCES encounter (id) ON DELETE SET NULL,
-    -- The wearer gets exactly one of these, enrolled once at setup. It turns
+    -- One wearer may have several templates, enrolled at setup. This turns
     -- diarization from a hard problem into a binary one.
     is_wearer           boolean NOT NULL DEFAULT false,
+    source              text NOT NULL DEFAULT '',
+    quality_score       real NOT NULL DEFAULT 0,
     created_at          timestamptz NOT NULL DEFAULT now(),
     deleted_at          timestamptz
 );
 
-CREATE UNIQUE INDEX voice_template_one_wearer_idx
+CREATE INDEX voice_template_wearer_idx
     ON voice_template (is_wearer) WHERE is_wearer AND deleted_at IS NULL;
 CREATE INDEX voice_template_embedding_idx
     ON voice_template USING hnsw (embedding vector_cosine_ops);
@@ -457,3 +460,11 @@ SELECT add_compression_policy('speech_observation', INTERVAL '7 days', if_not_ex
 
 SELECT add_retention_policy('face_observation', INTERVAL '90 days', if_not_exists => true);
 SELECT add_retention_policy('speech_observation', INTERVAL '90 days', if_not_exists => true);
+
+CREATE TABLE IF NOT EXISTS local_import_file (
+    source_path text PRIMARY KEY,
+    sha256 text NOT NULL,
+    content bytea NOT NULL,
+    person_ids uuid[] NOT NULL DEFAULT '{}',
+    imported_at timestamptz NOT NULL DEFAULT now()
+);

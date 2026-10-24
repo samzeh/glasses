@@ -16,12 +16,13 @@ from pathlib import Path
 
 import numpy as np
 
-from .db_cli import register as register_db
 from . import env
+from .db_cli import register as register_db
 from .face import FacePipeline, PipelineConfig
 from .face.types import FrameResult, MatchStatus
 from .meet_cli import register as register_meet
 from .search_cli import register as register_search
+from .storage import open_store, store_label
 from .store import LocalStore
 from .voice_cli import register as register_voice
 
@@ -123,8 +124,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     except Exception as error:  # noqa: BLE001 - this command reports, never raises
         print(f"\nmodel pack    unavailable: {error}")
 
-    store = LocalStore.load(args.store)
-    print(f"\nstore         {args.store}")
+    store = open_store(args.store)
+    print(f"\nstore         {store_label(args.store)}")
     print(f"  people      {len(store)}")
     print(f"  templates   {len(store.templates)}")
     models = store.models()
@@ -174,8 +175,11 @@ def capture_enrollment(args: argparse.Namespace, pipeline) -> tuple[list, list, 
             if not ok:
                 break
 
-            face = pipeline.process_frame(frame).primary
-            if face is None:
+            result = pipeline.process_frame(frame)
+            face = result.primary
+            if len(result.faces) > 1:
+                status, colour = "multiple faces - one person only", (0, 170, 220)
+            elif face is None:
                 status, colour = "no face", (90, 90, 90)
             elif face.embedding is None:
                 status, colour = ", ".join(face.quality.failures), (0, 170, 220)
@@ -233,7 +237,7 @@ def cmd_enroll(args: argparse.Namespace) -> int:
         )
         return 1
 
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     pipeline = build_pipeline(store)
 
     existing = store.find_by_name(args.name)
@@ -251,6 +255,10 @@ def cmd_enroll(args: argparse.Namespace) -> int:
         for path, frame in read_frames(expand_images(args.images)):
             result = pipeline.process_frame(frame)
             face = result.primary
+            if len(result.faces) > 1:
+                print(f"  skip {path.name}: multiple faces; use a photo of only {args.name}")
+                rejected += 1
+                continue
             if face is None or face.embedding is None:
                 reason = "no face" if face is None else ", ".join(face.quality.failures)
                 print(f"  skip {path.name}: {reason}")
@@ -291,7 +299,7 @@ def cmd_enroll(args: argparse.Namespace) -> int:
 
 
 def cmd_identify(args: argparse.Namespace) -> int:
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     if not store.templates:
         print("The gallery is empty — enroll someone first.", file=sys.stderr)
         return 1
@@ -315,7 +323,7 @@ def cmd_identify(args: argparse.Namespace) -> int:
 def cmd_watch(args: argparse.Namespace) -> int:
     """Live from a webcam. The closest thing to wearing the device."""
     cv2 = _require_cv2()
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     pipeline = build_pipeline(store)
 
     capture = cv2.VideoCapture(args.camera)
@@ -395,7 +403,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 
 def cmd_people(args: argparse.Namespace) -> int:
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     if not store.people:
         print("nobody enrolled")
         return 0
@@ -409,7 +417,7 @@ def cmd_people(args: argparse.Namespace) -> int:
 
 
 def cmd_forget(args: argparse.Namespace) -> int:
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     person = store.find_by_name(args.who) or store.people.get(args.who)
     if person is None:
         print(f"no such person: {args.who}", file=sys.stderr)
@@ -459,7 +467,7 @@ def cmd_calibrate_pose(args: argparse.Namespace) -> int:
 
 def cmd_bench(args: argparse.Namespace) -> int:
     """Per-stage timings, against the PRD's 2-second hot-loop budget."""
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     pipeline = build_pipeline(store)
 
     frames = list(read_frames(expand_images(args.images)))
@@ -506,8 +514,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--store",
         type=Path,
-        default=DEFAULT_STORE,
-        help=f"gallery directory (default: {DEFAULT_STORE})",
+        default=None,
+        help="explicit local gallery; default: TigerData when DATABASE_URL is set",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

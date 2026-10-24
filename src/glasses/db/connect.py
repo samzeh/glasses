@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 from . import schema_sql
@@ -172,6 +173,15 @@ def apply_schema(connection: Any, *, sql: str | None = None) -> int:
     return len(statements)
 
 
+def apply_cloud_migration(connection: Any) -> int:
+    """Upgrade an existing gallery without dropping tables or saved people."""
+    statements = split_statements(Path(__file__).with_name("cloud_migration.sql").read_text())
+    with connection.transaction(), connection.cursor() as cursor:
+        for statement in statements:
+            cursor.execute(statement)
+    return len(statements)
+
+
 def drop_schema(connection: Any, schema: str = "public") -> None:
     """Throw the whole thing away. ``db init --reset`` and the test fixture.
 
@@ -192,6 +202,7 @@ __all__ = [
     "REQUIRED_EXTENSIONS",
     "DatabaseUnavailable",
     "apply_schema",
+    "apply_cloud_migration",
     "available_extensions",
     "connect",
     "database_url",
