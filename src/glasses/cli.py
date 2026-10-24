@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .db_cli import register as register_db
 from . import env
 from .face import FacePipeline, PipelineConfig
 from .face.types import FrameResult, MatchStatus
@@ -568,6 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     register_voice(subparsers)
     register_meet(subparsers)
+    register_db(subparsers)
 
     return parser
 
