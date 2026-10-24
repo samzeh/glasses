@@ -107,7 +107,7 @@ def tool_definitions(config: ElasticConfig) -> list[dict[str, Any]]:
     """The six custom tools, as request bodies for ``POST /tools``."""
     segments, facts = config.segments_index, config.facts_index
     person_param = {
-        "type": "keyword",
+        "type": "string",
         "description": (
             "Lowercase wildcard pattern for the person's display name. "
             'Use "*dan*" to match a first name against a full name.'
@@ -201,7 +201,7 @@ def tool_definitions(config: ElasticConfig) -> list[dict[str, Any]]:
                 ),
                 "params": {
                     "location": {
-                        "type": "keyword",
+                        "type": "string",
                         "description": (
                             "Lowercase wildcard pattern for the place or event, "
                             'e.g. "*cal hacks*".'
@@ -231,14 +231,14 @@ def tool_definitions(config: ElasticConfig) -> list[dict[str, Any]]:
                 ),
                 "params": {
                     "value": {
-                        "type": "keyword",
+                        "type": "string",
                         "description": (
                             "Lowercase wildcard pattern for the fact's value, "
                             'e.g. "*biotech*".'
                         ),
                     },
                     "kind": {
-                        "type": "keyword",
+                        "type": "string",
                         "description": (
                             "Fact kind to restrict to: name, employer, role, "
                             'industry, commitment or interest. "*" for any.'

@@ -90,7 +90,10 @@ def test_every_esql_parameter_is_referenced_by_its_query():
         assert declared == used, tool["id"]
 
 
-PARAM_TYPES = ("keyword", "text", "integer", "long", "double", "date", "boolean")
+#: Agent Builder's own parameter types, which are NOT Elasticsearch field
+#: types. "keyword" is a mapping type and is refused here with a 400 naming
+#: this exact list, which is how the tools failed to create the first time.
+PARAM_TYPES = ("string", "integer", "float", "boolean", "date", "array")
 
 
 def test_every_esql_parameter_is_described():
