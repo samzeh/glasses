@@ -86,7 +86,7 @@ def test_above_the_threshold_is_a_match():
 
 
 def test_just_below_the_threshold_is_low_confidence_and_still_names_someone():
-    """ "Possibly Dan Kim" is useful; a confident wrong name is harmful."""
+    """ "Possibly Test Person" is useful; a confident wrong name is harmful."""
     result = resolve([PersonScore("dan", 0.37, 3)])
 
     assert result.status is MatchStatus.LOW_CONFIDENCE

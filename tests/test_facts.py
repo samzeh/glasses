@@ -33,10 +33,16 @@ CONVERSATION = [
         4.0,
         speaker=1,
         person_id="p1",
-        person_name="Dan Kim",
+        person_name="Test Person",
     ),
-    utterance("I'll send you the preprint on Monday.", 4.0, 6.0, speaker=1, person_id="p1",
-              person_name="Dan Kim"),
+    utterance(
+        "I'll send you the preprint on Monday.",
+        4.0,
+        6.0,
+        speaker=1,
+        person_id="p1",
+        person_name="Test Person",
+    ),
 ]
 
 
@@ -56,7 +62,7 @@ def extractor(facts, *, captured=None, **kwargs):
 
 
 GOOD = {
-    "subject": "Dan Kim",
+    "subject": "Test Person",
     "kind": "employer",
     "value": "Helix Bio",
     "evidence": "I work at Helix Bio, we do protein design.",
@@ -70,7 +76,7 @@ GOOD = {
 def test_the_transcript_is_speaker_labelled():
     rendered = F.render_transcript(CONVERSATION)
     assert "[Sam] Good to meet you." in rendered
-    assert "[Dan Kim] I work at Helix Bio, we do protein design." in rendered
+    assert "[Test Person] I work at Helix Bio, we do protein design." in rendered
 
 
 def test_a_speaker_with_no_identity_still_gets_a_label():
@@ -84,7 +90,7 @@ def test_blank_utterances_are_left_out():
 
 
 def test_speaker_names_are_in_first_appearance_order():
-    assert F.speaker_names(CONVERSATION) == ["Sam", "Dan Kim"]
+    assert F.speaker_names(CONVERSATION) == ["Sam", "Test Person"]
 
 
 def test_the_request_pins_the_schema_and_zero_temperature():
@@ -102,11 +108,9 @@ def test_the_request_pins_the_schema_and_zero_temperature():
 
 def test_the_prompt_names_the_speakers_and_the_wearer():
     captured = []
-    extractor([GOOD], captured=captured).extract(
-        CONVERSATION, encounter_id="e1", wearer_name="Sam"
-    )
+    extractor([GOOD], captured=captured).extract(CONVERSATION, encounter_id="e1", wearer_name="Sam")
     prompt = captured[0][2]["contents"][0]["parts"][0]["text"]
-    assert "'Dan Kim'" in prompt
+    assert "'Test Person'" in prompt
     assert "Sam" in prompt
 
 
@@ -127,7 +131,7 @@ def test_a_fact_is_mapped_back_to_the_person_who_said_it():
     [fact] = extractor([GOOD]).extract(CONVERSATION, encounter_id="e1")
     assert (fact.kind, fact.value) == ("employer", "Helix Bio")
     assert fact.person_id == "p1"
-    assert fact.person_name == "Dan Kim"
+    assert fact.person_name == "Test Person"
     assert fact.encounter_id == "e1"
 
 
@@ -135,6 +139,23 @@ def test_the_evidence_span_is_kept():
     """A fact with no evidence is one you cannot argue with."""
     [fact] = extractor([GOOD]).extract(CONVERSATION, encounter_id="e1")
     assert fact.evidence_span == GOOD["evidence"]
+
+
+def test_gemini_can_extract_a_typed_future_plan_and_favorite():
+    items = [
+        dict(GOOD, kind="plan", topic="next summer", value="visit Japan"),
+        dict(GOOD, kind="favorite", topic="movie", value="Spirited Away"),
+    ]
+    facts = extractor(items).extract(CONVERSATION, encounter_id="e1")
+    assert [(fact.kind, fact.topic, fact.value) for fact in facts] == [
+        ("plan", "next summer", "visit Japan"),
+        ("favorite", "movie", "Spirited Away"),
+    ]
+
+
+def test_a_whole_transcript_cannot_be_saved_as_one_fact():
+    item = dict(GOOD, value="conversation " * 20)
+    assert extractor([item]).extract(CONVERSATION, encounter_id="e1") == []
 
 
 def test_the_evidence_is_located_in_the_recording():
@@ -195,9 +216,7 @@ def test_an_invented_speaker_keeps_the_fact_but_not_the_identity():
 
 
 def test_a_non_numeric_confidence_is_dropped():
-    assert extractor([dict(GOOD, confidence="high")]).extract(
-        CONVERSATION, encounter_id="e1"
-    ) == []
+    assert extractor([dict(GOOD, confidence="high")]).extract(CONVERSATION, encounter_id="e1") == []
 
 
 def test_confidence_is_clamped():

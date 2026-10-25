@@ -240,6 +240,7 @@ def _reattribute(
             PersonFact(
                 encounter_id=fact.encounter_id,
                 kind=fact.kind,
+                topic=fact.topic,
                 value=fact.value,
                 person_id=person_id,
                 person_name=name,

@@ -31,6 +31,7 @@ db = [
 # replaces Whisper only, so segmentation and speaker embedding still run
 # locally, which is [voice]. It is the whisper-sized download it saves.
 cartesia = ["glasses[voice]"]
+hardware = ["glasses[face,voice]", "pyserial>=3.5"]
 
 [project.scripts]
 glasses = "glasses.cli:main"

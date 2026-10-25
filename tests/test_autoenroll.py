@@ -58,7 +58,7 @@ def store(tmp_path) -> LocalStore:
 # --- what counts as a name -----------------------------------------------
 
 
-@pytest.mark.parametrize("value", ["Vrinda", "Dan Kim", "Maria de la Cruz"])
+@pytest.mark.parametrize("value", ["Vrinda", "Test Person", "Maria de la Cruz"])
 def test_a_name_is_plausible(value):
     assert A.plausible_name(value)
 
