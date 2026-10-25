@@ -1,29 +1,33 @@
 # Voice Notes
 
-Record a voice note on your phone, get a spoken summary back. One Gemini call
-transcribes and summarizes the audio, a second turns the summary into speech.
+Record a voice note on your phone, get a spoken summary back, and keep the
+recording, transcript, and summary in the glasses project's TigerData database.
+One Gemini call transcribes and summarizes the audio, and a second turns the
+summary into speech.
 
-No dependencies. No build step. Two files.
+No build step. Node.js 20+, the `pg` package, Gemini, and TigerData are required.
 
-Part of the `glasses` project. This is the voice side: a self-contained web app
-that runs on a phone, independent of the Python CLI and the ESP32 firmware. It
-shares nothing with them and needs no Python environment.
+Part of the `glasses` project. This phone web app shares the TigerData database
+with the Python CLI, but does not need a Python environment to run.
 
 ## Run it
 
-1. Get a free API key at <https://aistudio.google.com/apikey>. No credit card.
+1. Get a Gemini API key and a TigerData `DATABASE_URL`. On a new database, run
+   `glasses db init` first to create the shared `encounter` table.
 
 2. Create `.env`:
 
    ```bash
    cd voice-notes
    cp .env.example .env
-   # then put your key in it
+   # then put your GEMINI_API_KEY and DATABASE_URL in it
    ```
 
-3. Start the server:
+3. Install the PostgreSQL driver, create the Voice Notes table, and start the server:
 
    ```bash
+   npm install
+   npm run db:init
    npm run dev
    ```
 
@@ -59,7 +63,9 @@ stage.
 phone browser  --MediaRecorder-->  base64 audio
       |
       v
-POST /api/summarize   ->  Gemini 3.8 Flash (audio in, JSON out)  ->  summary + transcript
+POST /api/summarize   ->  Gemini 3.8 Flash (audio in, JSON out)
+      |                         ->  encounter + voice_note in TigerData
+      |                         ->  summary + transcript in browser
       |
       v
 POST /api/speak       ->  Gemini 3.8 Flash TTS  ->  24 kHz WAV
@@ -69,11 +75,30 @@ played in an <audio> element
 ```
 
 Gemini accepts audio directly, so there is no separate transcription service.
-That is what makes the whole thing free.
+The server commits an `encounter` and linked `voice_note` in one database
+transaction before it reports success. `voice_note` stores the transcript,
+summary, original audio bytes, MIME type, duration, and model. Set
+`VOICE_NOTES_STORE_AUDIO=false` in `.env` to keep only text and metadata. The
+Gemini speech output is played in the browser and is not stored.
+
+Voice Notes does not send its notes to Elasticsearch. The existing `glasses ask`
+command searches Elastic's separate transcript and fact indices, so it will
+not find these Voice Notes until a sync or search integration is added.
+
+To inspect saved notes in TigerData:
+
+```sql
+SELECT e.id, e.started_at, v.summary, v.transcript,
+       v.audio_mime_type, v.audio_bytes, octet_length(v.audio_data) AS stored_audio_bytes
+FROM public.voice_note AS v
+JOIN public.encounter AS e ON e.id = v.encounter_id
+ORDER BY v.created_at DESC;
+```
 
 ## Cost
 
-Nothing, within the free tier. Flash allows 1,500 requests per day, which is
+Gemini may be free within its free tier; TigerData storage and usage depend on
+your service plan. Flash allows 1,500 requests per day, which is
 1,500 recordings. Each note uses two requests, so the real ceiling is about 750
 notes per day, and the per-minute limit of 10 requests is the one you would hit
 during a demo if you hammered it.
@@ -99,5 +124,6 @@ Do not record anything confidential.
 
 | File | What it does |
 |---|---|
-| `server.js` | HTTP server, holds the API key, proxies both Gemini calls |
+| `server.js` | HTTP server, holds the API key, proxies Gemini, saves notes |
+| `db.js` / `db-init.js` / `schema.sql` | TigerData connection, write transaction, and table setup |
 | `public/index.html` | The entire front end: recorder, level meter, playback |

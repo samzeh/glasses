@@ -6,7 +6,13 @@
   "description": "Record on a phone, summarize with Gemini, speak the summary back.",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --env-file=.env server.js"
+    "dev": "node --env-file=.env server.js",
+    "db:init": "node --env-file=.env db-init.js"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  }
 }
