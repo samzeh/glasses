@@ -1,0 +1,12 @@
+{
+  "name": "voice-notes-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Record on a phone, summarize with Gemini, speak the summary back.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --env-file=.env server.js"
+  },
+  "engines": { "node": ">=20" }
+}
