@@ -123,6 +123,50 @@ class FaceTracker:
         return [t for t in self.tracks.values() if at_us - t.last_seen_us <= self._drop_after_us]
 
 
+def people_in_frame(tracker: FaceTracker, *, min_samples: int = 8) -> int:
+    """How many other people the camera actually saw at once.
+
+    The wearer is behind the camera and never in frame, so every face is
+    someone else — which makes the picture a better census than the audio.
+    Diarization over-splits badly (a measured two-person conversation came
+    back as six speakers), and it cannot be told the answer because a
+    voice embedding that cannot separate two people reliably cannot count
+    them either. The camera can.
+
+    Counted as the largest number of tracks alive *at the same moment*,
+    not the number of track ids. Greedy IoU tracking starts a new id
+    whenever a face is lost and re-found, so one person who turns away
+    twice becomes three ids — but never three at once. Concurrency is
+    what "how many people are here" actually means.
+
+    Tracks with barely any mouth history are ignored: those are the
+    flickers that a detection or two creates and that never belonged to a
+    face anyone was talking to.
+    """
+    spans = [
+        (track.mouth[0].at_us, track.mouth[-1].at_us)
+        for track in tracker.tracks.values()
+        if len(track.mouth) >= min_samples
+    ]
+    if not spans:
+        return 0
+
+    # Sweep the endpoints: +1 when a track appears, -1 when it leaves.
+    edges: list[tuple[int, int]] = []
+    for start_us, end_us in spans:
+        edges.append((start_us, 1))
+        edges.append((end_us, -1))
+    # Departures before arrivals at the same instant, so two tracks that
+    # merely touch are not counted as overlapping.
+    edges.sort(key=lambda edge: (edge[0], edge[1]))
+
+    live = best = 0
+    for _at, delta in edges:
+        live += delta
+        best = max(best, live)
+    return best
+
+
 class AudioRecorder:
     """Microphone capture on the shared clock.
 
@@ -186,6 +230,11 @@ class Capture:
     audio: np.ndarray
     asd: AsdResult
     track: Track | None
+    #: The diarizer's within-recording speaker label, when there was one.
+    #: Kept because lip-sync can fail to find a face for an utterance, and
+    #: when it does this is the only thing left that still separates two
+    #: speakers from each other.
+    speaker: int | None = None
     #: Set once the voice gallery has been consulted.
     voice_person_id: str | None = None
     voice_name: str | None = None

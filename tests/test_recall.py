@@ -33,6 +33,9 @@ class FakeCapture:
     audio: np.ndarray = field(default_factory=lambda: np.zeros(16000, dtype=np.float32))
     track: FakeTrack | None = None
     is_wearer: bool = False
+    speaker: int | None = None
+    voice_person_id: str | None = None
+    voice_name: str | None = None
 
 
 class FakeTranscriber:
@@ -49,12 +52,16 @@ class FakeTranscriber:
         return self.texts.get(self.calls, "")
 
 
-def capture(start_s, end_s, track=None, wearer=False):
+def capture(start_s, end_s, track=None, wearer=False, speaker=None, voice=None):
+    person_id, name = voice or (None, None)
     return FakeCapture(
         start_us=int(start_s * 1_000_000),
         end_us=int(end_s * 1_000_000),
         track=track,
         is_wearer=wearer,
+        speaker=speaker,
+        voice_person_id=person_id,
+        voice_name=name,
     )
 
 
@@ -185,3 +192,49 @@ def test_a_track_with_no_frame_is_not_identified():
 
 def test_a_missing_track_is_not_identified():
     assert R.identify_track(object(), object(), None).note == "no frame"
+
+
+# --- falling through when lip-sync fails ---------------------------------
+
+
+def test_the_voice_gallery_names_a_speaker_lip_sync_could_not_place():
+    """Measured on a real take, correlation came back at 0.08-0.10 against
+    a 0.30 floor, so every utterance was unassigned. The voice is then the
+    only identity left, and using it beats attributing nothing."""
+    c = capture(0, 3, track=None, speaker=1, voice=("p9", "Vrinda"))
+    assert R.speaker_label(c, None) == "Vrinda"
+
+
+def test_the_diarizer_label_separates_speakers_with_no_face_and_no_voice():
+    """Without this they all collapse into one 'Unassigned speaker' and one
+    person's facts land on the other."""
+    one = R.speaker_label(capture(0, 3, track=None, speaker=1), None)
+    two = R.speaker_label(capture(4, 7, track=None, speaker=2), None)
+    assert (one, two) == ("Speaker 1", "Speaker 2")
+
+
+def test_a_face_match_still_beats_the_voice():
+    """The face is the identity; the voice is the fallback, not a rival."""
+    c = capture(0, 3, FakeTrack(5), voice=("p9", "WrongPerson"))
+    identity = R.FaceIdentity(person_id="p1", name="Vrinda", similarity=0.8)
+    assert R.speaker_label(c, identity) == "Vrinda"
+
+
+def test_voice_identity_reaches_the_utterance_when_the_face_does_not():
+    transcriber = FakeTranscriber({1: "I work at Acme."})
+    [utterance] = R.utterances_from_captures(
+        [capture(0, 3, track=None, speaker=1, voice=("p9", "Vrinda"))],
+        {},
+        transcriber,
+        audio_start_us=0,
+    )
+    assert utterance.person_id == "p9"
+    assert utterance.person_name == "Vrinda"
+    assert utterance.speaker == 1
+
+
+def test_a_speaker_already_known_by_voice_is_not_re_enrolled():
+    track = FakeTrack(4)
+    identities = {4: R.FaceIdentity(embedding=embedding(1), note="not recognised")}
+    c = capture(0, 2, track, voice=("p9", "Vrinda"))
+    assert R.face_templates_by_label([c], identities) == {}

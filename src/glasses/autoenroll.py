@@ -135,7 +135,10 @@ def embeddings_by_speaker(
             continue
         if result.embedding is None or result.segment.speaker is None:
             continue
-        table.setdefault(f"Speaker {result.segment.speaker}", []).append(result.embedding)
+        # The label the transcript used, so a folded cluster's templates
+        # land under the same key its facts did.
+        label = _name or f"Speaker {result.segment.speaker}"
+        table.setdefault(label, []).append(result.embedding)
     return table
 
 

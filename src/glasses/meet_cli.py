@@ -6,12 +6,27 @@ import argparse
 import sys
 from pathlib import Path
 
+from .attribution import (
+    apply_remap,
+    identities_by_speaker,
+    labels_for,
+    partner_remap,
+    transcribable,
+)
 from .autoenroll import MIN_NAME_CONFIDENCE
 from .binding.asd import AsdConfig
 from .encounter.clock import Clock, seconds_to_us, us_to_seconds
 from .face import FacePipeline
 from .face.models import default_providers
-from .meet import AudioRecorder, Capture, FaceTracker, MouthReader, assign_speakers, save_crop
+from .meet import (
+    AudioRecorder,
+    Capture,
+    FaceTracker,
+    MouthReader,
+    assign_speakers,
+    people_in_frame,
+    save_crop,
+)
 from .storage import open_store
 from .voice.audio import write_wav
 
@@ -62,8 +77,19 @@ def cmd_meet(args: argparse.Namespace) -> int:
     if not camera.isOpened():
         print(f"Could not open camera {args.camera}.", file=sys.stderr)
         return 1
-    camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    # 640x480 was cheap enough to hold 30 fps, and it put faces under
+    # the gate: at conversational distance a head is ~13% of the frame
+    # width, so 640 gives ~80px of face and well under the 40px between
+    # the eyes that the embedder needs. The face is then never embedded,
+    # never matched, and the person is a stranger every time you meet
+    # them. Detection cost rises with resolution; recognition failing
+    # costs the whole product.
+    camera.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+    actual_w = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if (actual_w, actual_h) != (args.width, args.height):
+        print(f"  camera gave {actual_w}x{actual_h}, not {args.width}x{args.height}")
 
     print(f"\nrecording {args.seconds}s — talk, and let the other person talk. q to stop.\n")
 
@@ -169,30 +195,51 @@ def _resolve(args, store, voice_pipeline, face_pipeline, tracker, audio, audio_s
     print("\nfinding speech …")
     result = voice_pipeline.process(audio)
 
+    # Identity is resolved from the segments long enough to embed, then
+    # carried to the short ones that share their speaker. Without this an
+    # introduction — short by nature — never reaches a recogniser at all.
+    identities = identities_by_speaker(result.segments, store)
+    # The camera is the census. The wearer is behind it and never in
+    # frame, so the faces it saw at once are the other people present —
+    # a count the audio cannot produce, because a voice embedding that
+    # cannot separate two people cannot count them.
+    seen = people_in_frame(tracker)
+    partners = args.partners if args.partners is not None else (seen or None)
+    if partners:
+        source = "you said" if args.partners is not None else "the camera saw"
+        print(f"{source} {partners} other person/people")
+    remap = partner_remap(result.segments, identities, partners=partners)
+    identities = apply_remap(identities, remap)
+    keep = transcribable(result.segments)
+    labels = labels_for(keep, identities, remap)
+    if remap:
+        print(f"folded {len(remap)} surplus speaker cluster(s) into {args.partners}")
+
     captures: list[Capture] = []
-    for item in result.segments:
-        if item.embedding is None:
-            continue
+    for item, (person_id, name, is_wearer) in zip(keep, labels, strict=True):
         start_us = audio_start_us + seconds_to_us(item.segment.start_s)
         end_us = audio_start_us + seconds_to_us(item.segment.end_s)
-        capture = Capture(
-            start_us=start_us,
-            end_us=end_us,
-            audio=item.segment.samples,
-            asd=None,  # type: ignore[arg-type]
-            track=None,
-            is_wearer=item.is_wearer,
-            voice_person_id=item.match.person_id if item.match else None,
-            voice_name=store.name_of(item.match.person_id)
-            if item.match and item.match.person_id
-            else None,
-            voice_similarity=item.match.similarity if item.match else 0.0,
+        captures.append(
+            Capture(
+                start_us=start_us,
+                end_us=end_us,
+                audio=item.segment.samples,
+                asd=None,  # type: ignore[arg-type]
+                track=None,
+                speaker=item.segment.speaker,
+                is_wearer=is_wearer,
+                voice_person_id=person_id,
+                voice_name=name or (store.name_of(person_id) if person_id else None),
+                voice_similarity=item.match.similarity if item.match else 0.0,
+            )
         )
-        captures.append(capture)
 
     if not captures:
-        print("no usable speech — segments need 3+ seconds of continuous talking")
+        print("no speech found in the recording")
         return 1
+
+    short = sum(1 for c in captures if c.duration_s() < 3.0)
+    print(f"{len(captures)} segment(s), {short} too short to identify on their own")
 
     partners = [c for c in captures if not c.is_wearer]
     assign_speakers(
@@ -384,7 +431,10 @@ def _identify_face(face_pipeline, store, track) -> str:  # type: ignore[no-untyp
 
     best = max(frame_result.faces, key=lambda f: iou(f.detection.bbox, track.bbox))
     if not best.quality.passed:
-        return f"face rejected ({', '.join(best.quality.failures)})"
+        return (
+            f"face rejected ({', '.join(best.quality.failures)}) "
+            f"iod={best.quality.interocular_px:.0f}px"
+        )
     if best.match is None or best.match.person_id is None:
         return "face not recognised (new person)"
     return f"{store.name_of(best.match.person_id)} ({best.match.similarity:.2f})"
@@ -394,6 +444,10 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     meet = subparsers.add_parser("meet", help="camera + mic: photograph whoever is speaking")
     meet.add_argument("--seconds", type=int, default=30)
     meet.add_argument("--camera", type=int, default=0)
+    meet.add_argument(
+        "--width", type=int, default=1280, help="capture width (faces need the pixels)"
+    )
+    meet.add_argument("--height", type=int, default=720, help="capture height")
     meet.add_argument("--device", type=int, default=None, help="audio input index")
     meet.add_argument("--out", default="captures", help="where to write face crops")
     meet.add_argument("--detect-every", type=int, default=5, help="frames between detections")
@@ -442,6 +496,13 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
         default=-1,
         help="pin the speaker count. Measured to make clustering WORSE on "
         "this model — leave it unless a recording proves otherwise",
+    )
+    meet.add_argument(
+        "--partners",
+        type=int,
+        default=None,
+        help="override the camera's count of how many other people were "
+        "there. Normally left alone: the faces in frame are the census",
     )
     meet.add_argument("--save-audio", action="store_true", help="keep the recorded wav")
     meet.add_argument("--headless", action="store_true")

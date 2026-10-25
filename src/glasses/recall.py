@@ -64,7 +64,13 @@ def identify_track(face_pipeline: Any, store: Any, track: Any) -> FaceIdentity:
     # Other faces in the frame belong to other tracks.
     best = max(result.faces, key=lambda f: iou(f.detection.bbox, track.bbox))
     if not best.quality.passed:
-        return FaceIdentity(note=f"rejected ({', '.join(best.quality.failures)})")
+        return FaceIdentity(
+            note=(
+                f"rejected ({', '.join(best.quality.failures)}) "
+                f"iod={best.quality.interocular_px:.0f}px "
+                f"yaw={best.quality.pose.yaw:+.0f} pitch={best.quality.pose.pitch:+.0f}"
+            )
+        )
 
     match = best.match
     if match is None or match.person_id is None:
@@ -107,9 +113,20 @@ def speaker_label(capture: Any, identity: FaceIdentity | None) -> str:
         return "you"
     if identity is not None and identity.name:
         return identity.name
+    # Lip-sync is the preferred binding and the one that can fail hardest:
+    # a quiet mouth, a face turned away, or a correlation that never
+    # clears its floor leaves the utterance with no face at all. Falling
+    # through to the voice gallery and then to the diarizer's own label
+    # keeps two speakers apart even then, which is the difference between
+    # facts landing on the right person and landing on "unknown".
+    if getattr(capture, "voice_name", None):
+        return str(capture.voice_name)
     track = getattr(capture, "track", None)
     if track is not None:
         return f"Speaker {track.id}"
+    speaker = getattr(capture, "speaker", None)
+    if speaker is not None:
+        return f"Speaker {speaker}"
     return "Unassigned speaker"
 
 
@@ -135,14 +152,19 @@ def utterances_from_captures(
             continue
         track = getattr(capture, "track", None)
         identity = identities.get(track.id) if track is not None else None
+        # Face first, then the voice gallery. Both can come back empty, and
+        # the label falls through the same order so the transcript and the
+        # facts agree about who this was.
+        person_id = (identity.person_id if identity else None) or capture.voice_person_id
+        name = (identity.name if identity and identity.name else None) or capture.voice_name
         out.append(
             Utterance(
                 text=text,
                 start_s=us_to_seconds(capture.start_us - audio_start_us),
                 end_s=us_to_seconds(capture.end_us - audio_start_us),
-                speaker=track.id if track is not None else None,
-                person_id=identity.person_id if identity else None,
-                person_name=(identity.name if identity and identity.name else None),
+                speaker=track.id if track is not None else capture.speaker,
+                person_id=person_id,
+                person_name=name if person_id else None,
                 is_wearer=capture.is_wearer,
             )
         )
@@ -161,7 +183,7 @@ def face_templates_by_label(
     table: dict[str, list[Any]] = {}
     for capture in captures:
         track = getattr(capture, "track", None)
-        if capture.is_wearer or track is None:
+        if capture.is_wearer or track is None or capture.voice_person_id:
             continue
         identity = identities.get(track.id)
         if identity is None or identity.known or identity.embedding is None:

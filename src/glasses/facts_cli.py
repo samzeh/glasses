@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .autoenroll import MIN_NAME_CONFIDENCE
-from .store import LocalStore
+from .storage import open_store
 
 
 def register(subparsers) -> None:  # type: ignore[no-untyped-def]
@@ -67,13 +67,19 @@ def _now_iso() -> str:
 
 
 def cmd_remember(args: argparse.Namespace) -> int:
+    from .attribution import (
+        apply_remap,
+        identities_by_speaker,
+        labels_for,
+        partner_remap,
+        transcribable,
+    )
     from .autoenroll import enroll_from_conversation, relabel_utterances
     from .facts import DEFAULT_MODEL, GeminiError, GeminiExtractor, has_api_key
     from .search.documents import segments_from_utterances
     from .voice import WhisperTranscriber, build_transcriber, render
     from .voice.audio import load_audio, write_wav
     from .voice_cli import (
-        _label_of,
         build_voice_pipeline,
         expand_audio,
         transcribe_with_fallback,
@@ -91,7 +97,7 @@ def cmd_remember(args: argparse.Namespace) -> int:
         print("Give either --mic or audio paths, not both and not neither.", file=sys.stderr)
         return 2
 
-    store = LocalStore.load(args.store)
+    store = open_store(args.store)
     wearer = store.wearer()
     wearer_name = wearer.display_name if wearer else "the wearer"
 
@@ -122,8 +128,18 @@ def cmd_remember(args: argparse.Namespace) -> int:
         occurred_at = _now_iso()
 
         result = pipeline.process(samples)
-        usable = [i for i in result.segments if i.embedding is not None]
-        speaker_labels = [_label_of(i, store) for i in usable]
+        # Everything audible is transcribed; only the segments long enough
+        # to embed decide identity, and they lend it to their short
+        # siblings. An introduction is short, and losing it loses the name.
+        identities = identities_by_speaker(result.segments, store)
+        # The diarizer over-splits; --partners says how many other people
+        # were actually there, and folds the surplus clusters together.
+        remap = partner_remap(result.segments, identities, partners=args.partners)
+        identities = apply_remap(identities, remap)
+        usable = transcribable(result.segments)
+        speaker_labels = labels_for(usable, identities, remap)
+        if remap:
+            print(f"  folded {len(remap)} surplus speaker cluster(s) into {args.partners}")
         utterances, transcriber = transcribe_with_fallback(
             transcriber,
             [i.segment for i in usable],
