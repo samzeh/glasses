@@ -308,12 +308,7 @@ def _remember(args, store, face_pipeline, captures, audio_start_us) -> int:  # t
     from .voice import WhisperTranscriber, build_transcriber
 
     if not has_api_key():
-        print(
-            "\nNo Gemini API key, so there are no facts to extract."
-            "\nSet GEMINI_API_KEY (a .env beside the repo is read at startup).",
-            file=sys.stderr,
-        )
-        return 2
+        print("\nNo Gemini API key: saving meeting details without a fun fact.", file=sys.stderr)
 
     encounter_id = args.encounter or f"enc-{uuid.uuid4().hex[:12]}"
     occurred_at = datetime.now(UTC).isoformat()
@@ -348,17 +343,18 @@ def _remember(args, store, face_pipeline, captures, audio_start_us) -> int:  # t
     print()
     print(render(utterances))
 
-    extractor = GeminiExtractor(model=args.gemini_model or DEFAULT_MODEL)
-    try:
-        facts = extractor.extract(
-            utterances,
-            encounter_id=encounter_id,
-            wearer_name=wearer_name,
-            occurred_at=occurred_at,
-        )
-    except GeminiError as error:
-        print(f"\n  ! extraction failed: {error}", file=sys.stderr)
-        facts = []
+    facts = []
+    if has_api_key():
+        extractor = GeminiExtractor(model=args.gemini_model or DEFAULT_MODEL)
+        try:
+            facts = extractor.extract(
+                utterances,
+                encounter_id=encounter_id,
+                wearer_name=wearer_name,
+                occurred_at=occurred_at,
+            )
+        except GeminiError as error:
+            print(f"\n  ! extraction failed: {error}", file=sys.stderr)
 
     if not args.no_enroll:
         enrolled, facts = enroll_from_conversation(
@@ -392,14 +388,26 @@ def _remember(args, store, face_pipeline, captures, audio_start_us) -> int:  # t
         print("\n--dry-run: nothing indexed")
         return 0
 
+    from .profiles import profile_path, save_encounter
+
+    profiles = save_encounter(
+        profile_path(store),
+        utterances,
+        facts,
+        encounter_id=encounter_id,
+        occurred_at=occurred_at,
+        location=args.location,
+    )
+    print(f"\nsaved display profiles for {len(profiles)} known person/people")
+
     from .search.config import ConfigError, ElasticConfig
     from .search_cli import _indexer
 
     try:
         config = ElasticConfig.from_env()
     except ConfigError as error:
-        print(f"\n  ! not indexed: {error}", file=sys.stderr)
-        return 1
+        print(f"\n  ! search index unavailable: {error}", file=sys.stderr)
+        return 0
 
     indexer = _indexer(config)
     indexer.ensure_indices()

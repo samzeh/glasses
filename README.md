@@ -238,6 +238,32 @@ two-person conversation). And **a stranger who introduces themselves is
 enrolled from the conversation**, face first, so the next encounter
 recognises them without anyone adding a contact.
 
+### ESP32 OLED recall
+
+For the ESP32 and a 128×64 SSD1306 OLED, install the Python hardware extra
+(`uv pip install -e '.[hardware]'`) and the Arduino **Adafruit GFX** and
+**Adafruit SSD1306** libraries. Flash
+`arduino_smart_glasses.ino/test_arduino.ino`, then run:
+
+```sh
+export GLASSES_SERIAL_PORT=/dev/cu.usbmodemXXXX  # COM5 on Windows
+export GLASSES_CAMERA_INDEX=0                    # select your camera
+export GLASSES_LOCATION='Cal Hacks'              # optional meeting location
+python vision_hub.py
+```
+
+Set `GLASSES_PREVIEW=1` to also open the camera debug windows with a GUI
+OpenCV build. The OLED flow runs without those windows.
+
+Hold the touch pad to start a conversation and hold again to end it. At the
+end, the host transcribes speech, extracts facts when `GEMINI_API_KEY` is set,
+and saves a small local profile in `glasses-store/encounters.json`. A short
+tap starts or stops live recognition. When a saved face appears, the OLED
+shows their name, first meeting date, first meeting location (or `Unknown`),
+and one saved interest or work fact (or `None saved`). The text scrolls down
+one pixel every 160 ms. The host also indexes the full transcript and facts
+in Elastic when configured; the OLED profile works without Elastic.
+
 ### From a real conversation, not the seed
 
 `search-seed` is synthetic, and the agent will say so when asked. To ask
@@ -623,9 +649,9 @@ the TigerData schema that followed it. ESP32-S3 firmware lives in
 `arduino_smart_glasses.ino/` alongside `vision_hub.py`.
 
 Still missing from the PRD: the dwell-and-speech trigger is written
-(`encounter/session.py`) but nothing calls it, nothing writes the
-observation hypertables yet, and there is no HUD — recall surfaces in a
-terminal.
+(`encounter/session.py`) but nothing calls it, and nothing writes the
+observation hypertables yet. The OLED shows a short local summary; broader
+recall remains in the terminal.
 
 ```
 src/glasses/
