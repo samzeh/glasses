@@ -7,6 +7,7 @@ bookkeeping.
 """
 
 from .clock import US, Clock, FixedClock, seconds_to_us, us_to_seconds
+from .record import build_encounter, face_observations, speech_observations
 from .session import EncounterSession, TriggerConfig, merge_face_frames
 from .types import (
     Encounter,
@@ -27,7 +28,10 @@ __all__ = [
     "Interval",
     "SpeechObservation",
     "TriggerConfig",
+    "build_encounter",
+    "face_observations",
     "merge_face_frames",
+    "speech_observations",
     "seconds_to_us",
     "us_to_seconds",
 ]

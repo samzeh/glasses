@@ -56,6 +56,12 @@ class Track:
     id: int
     bbox: BBox
     last_seen_us: int
+    #: When this face was first seen. With ``last_seen_us`` it is the span a
+    #: ``FaceObservation`` needs; the tracker only ever needed the latter.
+    first_seen_us: int = -1
+    #: Detections attributed to this track. The observation records it rather
+    #: than a duration because the capture rate is too low to interpolate.
+    frame_count: int = 0
     mouth: list[MouthSample] = field(default_factory=list)
     #: Most recent detection, used for landmarks on every frame. Between
     #: detections its box is a few frames stale, which is what tracking is
@@ -68,10 +74,15 @@ class Track:
     best_width: float = 0.0
     best_detection: Detection | None = None
 
+    def __post_init__(self) -> None:
+        if self.first_seen_us < 0:
+            self.first_seen_us = self.last_seen_us
+
     def observe(self, detection: Detection, frame: np.ndarray, at_us: int) -> None:
         self.bbox = detection.bbox
         self.current_detection = detection
         self.last_seen_us = at_us
+        self.frame_count += 1
         if detection.bbox.width > self.best_width:
             self.best_width = detection.bbox.width
             self.best_frame = frame.copy()
