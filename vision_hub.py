@@ -1,16 +1,15 @@
 import os
-import platform
 import socket
 import sys
 
 import serial
-import serial.tools.list_ports
 import cv2
 import numpy as np
 import time
 
 from glasses import env
 from glasses.binding.asd import AsdConfig
+from glasses.device import find_serial_port, open_camera
 from glasses.encounter.clock import Clock, seconds_to_us, us_to_seconds
 from glasses.encounter.record import build_encounter, face_observations, speech_observations
 from glasses.face import ArcFaceEmbedder, FacePipeline, ScrfdDetector
@@ -29,50 +28,6 @@ BAUD_RATE = 115200
 #: glasses, so the host name is the honest answer until there are more.
 DEVICE_ID = os.environ.get("GLASSES_DEVICE_ID") or socket.gethostname()
 CAMERA_INDEX = int(os.environ.get("GLASSES_CAMERA", "1"))
-
-
-def find_serial_port():
-    """The ESP32's port, by name, on whichever OS this is.
-
-    Hardcoding one is how this came to be pinned to a Windows COM port that
-    does not exist on the machine it now runs on.
-    """
-    override = os.environ.get("GLASSES_SERIAL_PORT")
-    if override:
-        return override
-    #: The USB-serial bridges these boards ship with, plus the S3's native USB.
-    wanted = ("usbmodem", "usbserial", "wchusbserial", "SLAB_USBtoUART", "ttyUSB", "ttyACM")
-    for port in serial.tools.list_ports.comports():
-        if any(name in port.device for name in wanted):
-            return port.device
-    if platform.system() == "Windows":
-        ports = [p.device for p in serial.tools.list_ports.comports()]
-        if ports:
-            return ports[0]
-    return None
-
-
-def open_camera(index=CAMERA_INDEX):
-    """A capture handle, without the Windows-only backend on macOS.
-
-    ``cv2.CAP_DSHOW`` is DirectShow. Passing it elsewhere fails to open the
-    camera at all, which is silent until the first ``cap.read()`` returns
-    nothing.
-    """
-    capture = (
-        cv2.VideoCapture(index, cv2.CAP_DSHOW)
-        if platform.system() == "Windows"
-        else cv2.VideoCapture(index)
-    )
-    capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    if platform.system() == "Windows":
-        # Fixed exposure keeps the mouth signal stable, but these two are
-        # unsupported on the AVFoundation backend and make it return blank
-        # frames rather than ignoring them.
-        capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
-        capture.set(cv2.CAP_PROP_EXPOSURE, -4)
-    return capture
 
 
 print("Loading Face and Voice machine learning models...")
@@ -233,7 +188,7 @@ while True:
         # MULTIMODAL RECORDING MODE (Tap & Hold)
         if command == "CAM_ON":
             print("\nHardware Trigger: Camera & Mic ON. Recording session...")
-            cap = open_camera()
+            cap = open_camera(CAMERA_INDEX)
 
             clock = Clock.start()
             tracker = FaceTracker()
@@ -304,7 +259,7 @@ while True:
         # CONTINUOUS IDENTIFY MODE (Single Tap)
         elif command == "SNAPSHOT" and not is_recording:
             print("\nHardware Trigger: Continuous Identify Mode ON...")
-            cap = open_camera()
+            cap = open_camera(CAMERA_INDEX)
 
             prev_frame_time = 0
             last_lcd_update = 0

@@ -189,11 +189,59 @@ sherpa-onnx's own example default, and it is correct on the three-recording
 real-speech sample this was tested against (genuine 0.658, impostor 0.584).
 That is not a calibration. `voice-eval` does it properly on your voices.
 
+## Automatic capture, no buttons
+
+`vision_hub.py` waits for the touch pad. `auto_hub.py` does not wait for
+anything: it decides when a conversation has started and when it has ended.
+
+```bash
+python auto_hub.py                 # camera, trigger, and the loopback bridge
+cd voice-notes && npm run dev      # the phone's microphone and the proxy
+```
+
+Open the Voice Notes page on the phone and tap **Auto** once — a browser will
+not open a microphone without a gesture. Nothing is pressed after that.
+
+The trigger is the one in `encounter/session.py`: a centred face for five
+seconds across three detections, *and* speech. Either alone opens a
+provisional encounter; both together confirm it. A conversation that never
+materialises expires after thirty seconds and its video is deleted.
+
+Why it is split the way it is: the microphone is on the phone and the camera
+is on the laptop, so neither side can decide alone. The phone does voice
+activity detection, because it holds the stream, and reports start and stop
+events. The hub owns the policy, because that policy is already written and
+tested there and two copies of it would drift. The phone cannot call the hub
+directly — its page is HTTPS through a tunnel and browsers block mixed
+content — so the Voice Notes server proxies over loopback:
+
+```
+phone  --/api/vad-->   voice-notes server  --127.0.0.1:8788-->  auto_hub.py
+       <--/api/trigger--                   <--                  (EncounterSession)
+```
+
+Both halves file against **one** encounter id. The phone sends it with the
+audio, so a conversation is one row with a `voice_note` attached, not a video
+encounter and an audio encounter that nothing joins.
+
+Recording starts on the phone's *local* voice activity rather than waiting
+for the hub to confirm — a round trip would cost the first words. The hub
+decides whether what was recorded is kept. Most recordings are not.
+
+Known limits: speech observations from this path are unattributed
+(`person_id` null), because a level meter cannot say who spoke. Backgrounding
+the browser suspends its audio and stops automatic mode, which the page says
+when it happens. The five-minute recording cap still applies, so a longer
+conversation is captured up to that and then filed.
+
+`TriggerConfig` in `encounter/session.py` holds the thresholds, and they are
+marked for calibration against real wear rather than guessed at.
+
 ## Recall: ask about the people you have met
 
 The separate [Voice Notes web app](voice-notes/README.md) saves its recordings,
 transcripts, and summaries in TigerData. It does not currently index those notes
-in Elastic, so `glasses ask` does not search them.
+in Elastic, so `glasses ask "…"` does not search them.
 
 Recognition answers *who is in front of me*. Recall answers the other
 question — *who have I met who works in biotech?* — and it is a search
@@ -302,7 +350,7 @@ The current CLI does not complete that sync: `glasses meet --remember` and
 Elastic, without saving those records in TigerData. Do not delete the Elastic
 indices expecting to rebuild them from TigerData. Voice Notes takes the other
 path: it saves recordings, transcripts, and summaries in TigerData but does not
-index them in Elastic. `glasses ask` therefore searches only the CLI's indexed
+index them in Elastic. `glasses ask "…"` therefore searches only the CLI's indexed
 conversations, not Voice Notes.
 
 Two document types, both with deterministic ids so that re-running the
@@ -622,10 +670,15 @@ pipeline, the encounter clock, fact extraction, the Elastic recall layer and
 the TigerData schema that followed it. ESP32-S3 firmware lives in
 `arduino_smart_glasses.ino/` alongside `vision_hub.py`.
 
-Still missing from the PRD: the dwell-and-speech trigger is written
-(`encounter/session.py`) but nothing calls it, nothing writes the
-observation hypertables yet, and there is no HUD — recall surfaces in a
-terminal.
+The dwell-and-speech trigger (`encounter/session.py`) now drives capture for
+real: `auto_hub.py` feeds it the camera and the phone's voice activity, and
+encounters and both observation hypertables are written on close. See
+[Automatic capture](#automatic-capture-no-buttons) below.
+
+Still missing from the PRD: `media_asset` is never written — session video
+goes to `data/sessions/` with no row pointing at it — speech observations
+from the automatic trigger are unattributed, and there is no HUD, so recall
+surfaces in a terminal.
 
 ```
 src/glasses/

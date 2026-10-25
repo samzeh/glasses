@@ -57,6 +57,37 @@ tailscale serve --https=443 http://localhost:8787
 This is the step that trips people up at hackathons. Do it before you are on
 stage.
 
+## Automatic mode
+
+Tap **Auto** once instead of **Start recording**, and the app stops needing to
+be touched. It keeps the microphone open, watches the level for voice activity,
+and reports start and stop to `auto_hub.py` in the Python project — which is
+watching the camera at the same time. When a face has dwelled *and* speech has
+been heard, that encounter is confirmed and this recording is kept; when the
+conversation ends, the recording is filed against the same encounter id the hub
+created. An encounter that never became a conversation expires, and the
+recording is discarded without ever reaching Gemini.
+
+Run both halves:
+
+```bash
+python auto_hub.py              # in the project root
+npm run dev                     # here
+```
+
+The status line under the buttons says what the hub can see — how many faces
+are in view, and whether a conversation is confirmed. `Hub not reachable`
+means `auto_hub.py` is not running, and nothing will be kept until it is.
+
+Two things worth knowing: the one tap is unavoidable, because a browser will
+not open a microphone without a gesture; and backgrounding the tab suspends
+the audio context, which stops automatic mode — the page tells you when that
+happens rather than appearing to still listen.
+
+`VAD_THRESHOLD` at the top of `public/index.html` is the loudness above which
+a frame counts as speech. The level meter is the thing to calibrate it
+against, in the room you will actually be in.
+
 ## How it works
 
 ```

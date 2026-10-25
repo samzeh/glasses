@@ -272,6 +272,23 @@ def test_a_provisional_encounter_expires_without_partner_speech():
     assert session.current is None
 
 
+def test_speech_without_dwell_expires_rather_than_living_forever():
+    """A podcast, or talking with nobody in front of you.
+
+    It can never be promoted — there is no dwell — so if expiry waited on
+    silence it would stay open indefinitely and ``_ensure_open`` would keep
+    returning it, blocking every later encounter.
+    """
+    session = EncounterSession()
+    session.observe_speech(speech(0, 4))
+
+    ended = session.tick(seconds_to_us(40))
+
+    assert ended is not None
+    assert ended.status is EncounterStatus.EXPIRED
+    assert session.current is None
+
+
 def test_a_confirmed_encounter_never_expires():
     session = EncounterSession()
     session.observe_face(face(0, 10, frames=5))

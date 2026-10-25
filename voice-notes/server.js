@@ -1,7 +1,15 @@
 // Holds the Gemini API key, saves each note in TigerData, and serves the front end.
-//   POST /api/summarize  { mimeType, audio: <base64>, durationMs } -> { summary, transcript, encounterId }
+//   POST /api/summarize  { mimeType, audio: <base64>, durationMs, encounterId? }
+//                                                      -> { summary, transcript, encounterId }
 //   POST /api/speak      { text }                      -> { audio: <base64 wav> }
+//   POST /api/vad        { event: 'start'|'end' }       -> the hub's trigger state
+//   GET  /api/trigger                                   -> the hub's trigger state
 // Run: npm run db:init, then npm run dev (both keys in .env).
+//
+// The last two exist because the phone cannot reach the Python hub directly.
+// Its page is served over HTTPS through a tunnel, and a browser on an HTTPS
+// origin may not call plain HTTP — so the phone talks to this server on its
+// own origin and this server forwards over loopback.
 
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -23,6 +31,49 @@ const TTS_VOICE = process.env.GEMINI_TTS_VOICE ?? 'Kore';
 // Inline audio must fit the 20MB whole-request limit. Base64 inflates by 4/3,
 // so cap the decoded audio well under that.
 const MAX_BODY_BYTES = 14 * 1024 * 1024;
+
+// Where auto_hub.py's trigger bridge listens. Loopback: it has no
+// authentication and must not be reachable off this machine.
+const TRIGGER_URL = (process.env.TRIGGER_URL ?? 'http://127.0.0.1:8788').replace(/\/$/, '');
+// The phone polls this. A hub that is slow or gone must not stall the page,
+// so the timeout is short and a failure answers "unavailable".
+const TRIGGER_TIMEOUT_MS = 2000;
+
+async function callTrigger(path, init) {
+  const response = await fetch(`${TRIGGER_URL}${path}`, {
+    ...init,
+    signal: AbortSignal.timeout(TRIGGER_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`trigger ${response.status}`);
+  return response.json();
+}
+
+// `available: false` is the phone's cue to stay idle rather than record into
+// a void: without the hub there is no camera, so nothing can be confirmed.
+async function handleTrigger(res) {
+  try {
+    return sendJson(res, 200, { available: true, ...(await callTrigger('/state')) });
+  } catch (error) {
+    return sendJson(res, 200, { available: false, reason: String(error.message ?? error) });
+  }
+}
+
+async function handleVad(req, res) {
+  const { event } = await readJsonBody(req);
+  if (event !== 'start' && event !== 'end') {
+    return sendJson(res, 400, { error: "event must be 'start' or 'end'" });
+  }
+  try {
+    const state = await callTrigger('/speech', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ event }),
+    });
+    return sendJson(res, 200, { available: true, ...state });
+  } catch (error) {
+    return sendJson(res, 200, { available: false, reason: String(error.message ?? error) });
+  }
+}
 
 const PROMPT = `You are summarizing a voice recording.
 
@@ -139,7 +190,7 @@ function sendJson(res, status, obj) {
 }
 
 async function handleSummarize(req, res) {
-  const { audio, mimeType, durationMs } = await readJsonBody(req);
+  const { audio, mimeType, durationMs, encounterId } = await readJsonBody(req);
   if (typeof audio !== 'string' || audio.length < 100 ||
       !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(audio)) {
     return sendJson(res, 400, { error: 'No audio received.' });
@@ -158,18 +209,20 @@ async function handleSummarize(req, res) {
   const text = collectText(payload);
   if (!text) return sendJson(res, 502, { error: 'The model returned an empty response.' });
   const { summary, transcript } = parseSummary(text);
-  let encounterId;
+  let saved;
   try {
-    encounterId = await saveVoiceNote({
+    saved = await saveVoiceNote({
       transcript, summary, audio: recording, mimeType: normalizedMime,
       durationMs: recordingDuration, model: TEXT_MODEL, keepAudio: KEEP_AUDIO,
+      encounterId: typeof encounterId === 'string' ? encounterId : null,
     });
   } catch (error) {
     console.error('[database] could not save note:', error.message);
     return sendJson(res, 503, { error: 'Could not save this note to TigerData. Please retry.' });
   }
-  console.log(`[summarize] ok, ${summary.length} chars of summary`);
-  sendJson(res, 200, { summary, transcript, encounterId });
+  const where = saved.linked ? `linked to encounter ${saved.encounterId}` : 'own encounter';
+  console.log(`[summarize] ok, ${summary.length} chars of summary, ${where}`);
+  sendJson(res, 200, { summary, transcript, encounterId: saved.encounterId, linked: saved.linked });
 }
 
 async function handleSpeak(req, res) {
@@ -200,6 +253,12 @@ const server = createServer(async (req, res) => {
       } catch {
         return sendJson(res, 503, { ok: false, keyConfigured: Boolean(KEY), databaseReady: false });
       }
+    }
+    if (req.method === 'GET' && url.pathname === '/api/trigger') {
+      return await handleTrigger(res);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/vad') {
+      return await handleVad(req, res);
     }
     if (req.method === 'POST' && (url.pathname === '/api/summarize' || url.pathname === '/api/speak')) {
       if (!KEY) return sendJson(res, 500, { error: 'GEMINI_API_KEY is not set on the server.' });

@@ -92,8 +92,10 @@
     <div class="timer idle" id="timer">0:00</div>
     <div class="row" style="width:100%">
       <button class="primary" id="record">Start recording</button>
+      <button id="auto">Auto</button>
     </div>
     <p class="hint" id="hint">Tap to start. Recording stops automatically after five minutes.</p>
+    <p class="hint" id="autoStatus"></p>
   </div>
 
   <div class="card hidden" id="result">
@@ -128,8 +130,41 @@
     stage: el('stage'), meter: el('meter'), timer: el('timer'), record: el('record'),
     hint: el('hint'), result: el('result'), summary: el('summary'), play: el('play'),
     again: el('again'), transcriptWrap: el('transcriptWrap'), transcript: el('transcript'),
-    banner: el('banner'),
+    banner: el('banner'), auto: el('auto'), autoStatus: el('autoStatus'),
   };
+
+  // --- automatic mode ----------------------------------------------------
+  // The microphone is here and the camera is on the hub, so neither side can
+  // decide alone. This half does voice activity detection, because it is the
+  // half holding the stream, and reports it. The hub owns the policy — dwell
+  // plus speech, and when a conversation has ended — because that policy is
+  // already written and tested there, and two copies of it would drift.
+  //
+  // Recording starts on *local* voice activity rather than waiting for the
+  // hub to confirm: a round trip would cost the first words. What the hub
+  // decides is whether the recording is kept. Most are not.
+
+  //: Loudness above which a frame counts as speech. Hand-tuned; the level
+  //: meter beside it is the thing to calibrate against in a noisy room.
+  const VAD_THRESHOLD = 0.035;
+  //: Sustained speech before it counts, so a cough is not a conversation.
+  const VAD_ATTACK_MS = 250;
+  //: Silence before speech is declared over. Generous: people pause inside
+  //: sentences, and a short hangover shreds one utterance into many.
+  const VAD_RELEASE_MS = 1200;
+  const VAD_INTERVAL_MS = 50;
+  const POLL_MS = 1000;
+  //: Give up on an un-opened encounter rather than record indefinitely.
+  const ORPHAN_LIMIT_MS = 45000;
+
+  let autoOn = false;
+  let vadTimer = 0, pollTimer = 0;
+  let speechOn = false, aboveSince = 0, belowSince = 0;
+  let waveform = null;
+  let liveEncounterId = null;   // the hub's id for the conversation in progress
+  let recordingSince = 0;
+  let autoSubmitId = null;      // encounter this recording should be filed under
+  let discardNext = false;      // this recording ended in an expired encounter
 
   let state = 'idle';
   let stream = null, recorder = null, chunks = [], chosenMime = '';
@@ -163,7 +198,9 @@
     ui.stage.classList.toggle('recording', next === 'recording');
     ui.timer.classList.toggle('idle', next !== 'recording');
     const busy = next === 'requesting' || next === 'processing';
-    ui.record.disabled = busy;
+    // Automatic mode owns the recorder; the manual button must stay out of it
+    // (and setState runs after armAuto, so disabling it there would be undone).
+    ui.record.disabled = busy || autoOn;
     if (next === 'recording') {
       ui.record.className = 'danger';
       ui.record.innerHTML = '<span class="dot"></span>Stop and summarize';
@@ -252,17 +289,12 @@
     tickId = 0;
   }
 
-  async function startRecording() {
-    setBanner('');
-    ui.result.classList.add('hidden');
-    unlockAudioOutput();
-    setState('requesting', 'Allow microphone access to continue.');
-
-    chosenMime = pickMime();
-    if (chosenMime === null) {
-      setState('error', 'This browser cannot record audio. Try Chrome or Safari.');
-      return;
-    }
+  // Opening the microphone is separate from recording because automatic mode
+  // needs the stream for voice activity long before, and between, recordings.
+  // Reuses a live stream: a second getUserMedia on the same device is asking
+  // for trouble on iOS.
+  async function openMic() {
+    if (stream && stream.getAudioTracks().some((t) => t.readyState === 'live')) return true;
 
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -276,13 +308,14 @@
           ? 'No microphone was found on this device.'
           : 'Could not open the microphone: ' + (name || 'unknown error');
       setState('error', message);
-      return;
+      return false;
     }
 
     // A device unplugged or an interrupting call ends the track mid-recording.
     stream.getAudioTracks().forEach((track) => {
       track.addEventListener('ended', () => {
         if (state === 'recording') stopRecording();
+        if (autoOn) disarmAuto('The microphone was disconnected.');
       });
     });
 
@@ -293,9 +326,27 @@
       analyser.fftSize = 256;
       analyser.smoothingTimeConstant = 0.75;
       levels = new Uint8Array(analyser.frequencyBinCount);
+      // Time domain, separate from the meter's frequency bins: loudness is
+      // what voice activity is measured on.
+      waveform = new Uint8Array(analyser.fftSize);
       audioCtx.createMediaStreamSource(stream).connect(analyser);
       drawMeter();
     } catch { /* the meter is cosmetic; recording continues without it */ }
+    return true;
+  }
+
+  async function startRecording() {
+    setBanner('');
+    ui.result.classList.add('hidden');
+    unlockAudioOutput();
+    setState('requesting', 'Allow microphone access to continue.');
+
+    chosenMime = pickMime();
+    if (chosenMime === null) {
+      setState('error', 'This browser cannot record audio. Try Chrome or Safari.');
+      return;
+    }
+    if (!await openMic()) return;
 
     chunks = [];
     try {
@@ -321,14 +372,172 @@
       if (elapsed >= MAX_SECONDS) stopRecording();
     }, 200);
 
-    setState('recording', 'Listening. Tap stop when you are done.');
+    recordingSince = Date.now();
+    setState('recording', autoOn
+      ? 'Heard you. Recording while the hub decides if this is a conversation.'
+      : 'Listening. Tap stop when you are done.');
   }
 
-  function stopRecording() {
+  function stopRecording(options) {
     if (!recorder || recorder.state === 'inactive') return;
+    discardNext = Boolean(options && options.discard);
     stopTimer();
-    setState('processing', 'Sending to the model. This usually takes a few seconds.');
+    setState('processing', discardNext
+      ? 'Not a conversation. Discarding.'
+      : 'Sending to the model. This usually takes a few seconds.');
     recorder.stop();
+  }
+
+  // --- automatic mode: voice activity here, policy on the hub -------------
+
+  function autoHint() {
+    if (!autoOn) return '';
+    return 'Auto on. Talk to someone in front of the camera — nothing to press.';
+  }
+
+  function setAutoStatus(text) {
+    ui.autoStatus.textContent = text || '';
+  }
+
+  /** Loudness of the current frame, 0..1. */
+  function loudness() {
+    if (!analyser || !waveform) return 0;
+    analyser.getByteTimeDomainData(waveform);
+    let sum = 0;
+    for (let i = 0; i < waveform.length; i++) {
+      const centred = (waveform[i] - 128) / 128;
+      sum += centred * centred;
+    }
+    return Math.sqrt(sum / waveform.length);
+  }
+
+  async function reportVad(event) {
+    try {
+      const res = await fetch('/api/vad', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ event }),
+      });
+      applyTriggerState(await res.json());
+    } catch { /* the poll will catch up */ }
+  }
+
+  // Attack and release are asymmetric on purpose: quick to notice speech so
+  // the recording starts with the first word, slow to call it over so a pause
+  // mid-sentence does not split one utterance into several.
+  function pollVad() {
+    const now = Date.now();
+    const loud = loudness() > VAD_THRESHOLD;
+
+    if (loud) {
+      belowSince = 0;
+      if (!aboveSince) aboveSince = now;
+      if (!speechOn && now - aboveSince >= VAD_ATTACK_MS) {
+        speechOn = true;
+        // 'requesting' matters: startRecording is async, and without it a
+        // tick 50ms later would open a second recorder on the same stream.
+        if (state !== 'recording' && state !== 'processing' && state !== 'requesting') {
+          startRecording();
+        }
+        reportVad('start');
+      }
+    } else {
+      aboveSince = 0;
+      if (!belowSince) belowSince = now;
+      if (speechOn && now - belowSince >= VAD_RELEASE_MS) {
+        speechOn = false;
+        reportVad('end');
+      }
+    }
+  }
+
+  /** What the hub says, turned into keep, discard, or carry on. */
+  function applyTriggerState(trigger) {
+    if (!trigger || trigger.available === false) {
+      setAutoStatus('Hub not reachable — start auto_hub.py. Recording will not be kept.');
+      return;
+    }
+    if (trigger.encounter_id) liveEncounterId = trigger.encounter_id;
+    if (trigger.confirmed && liveEncounterId) autoSubmitId = liveEncounterId;
+
+    const parts = [];
+    parts.push(trigger.faces_in_view ? `${trigger.faces_in_view} face in view` : 'no face in view');
+    parts.push(trigger.confirmed ? 'conversation confirmed'
+      : trigger.active ? 'watching' : 'idle');
+    setAutoStatus(parts.join(' · '));
+
+    const finished = trigger.finished_id;
+    if (finished && liveEncounterId && finished === liveEncounterId) {
+      liveEncounterId = null;
+      if (state === 'recording') {
+        // "closed" is a real conversation; "expired" never became one, and
+        // the hub has already deleted its video.
+        stopRecording({ discard: trigger.finished_status !== 'closed' });
+      }
+      return;
+    }
+
+    // Nothing opened on the hub and nobody is talking: this was a noise.
+    if (state === 'recording' && !trigger.active && !speechOn
+        && Date.now() - recordingSince > ORPHAN_LIMIT_MS) {
+      stopRecording({ discard: true });
+    }
+  }
+
+  async function pollTrigger() {
+    try {
+      const res = await fetch('/api/trigger', { cache: 'no-store' });
+      applyTriggerState(await res.json());
+    } catch {
+      setAutoStatus('Hub not reachable — start auto_hub.py.');
+    }
+  }
+
+  async function armAuto() {
+    unlockAudioOutput();     // one gesture buys the mic and the playback
+    setState('requesting', 'Allow microphone access to continue.');
+    chosenMime = pickMime();
+    if (chosenMime === null) {
+      setState('error', 'This browser cannot record audio. Try Chrome or Safari.');
+      return;
+    }
+    if (!await openMic()) return;
+    // Voice activity is measured on the analyser. Without it nothing would
+    // ever trigger, and auto mode would sit there looking armed.
+    if (!analyser || !waveform) {
+      setState('error', 'This browser could not open an audio analyser, so automatic mode cannot hear you. Use Start recording instead.');
+      return;
+    }
+
+    autoOn = true;
+    speechOn = false;
+    aboveSince = belowSince = 0;
+    ui.auto.className = 'danger';
+    ui.auto.textContent = 'Auto on';
+    ui.record.disabled = true;
+    vadTimer = setInterval(pollVad, VAD_INTERVAL_MS);
+    pollTimer = setInterval(pollTrigger, POLL_MS);
+    pollTrigger();
+    setState('idle', autoHint());
+  }
+
+  function disarmAuto(message) {
+    autoOn = false;
+    if (vadTimer) clearInterval(vadTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    vadTimer = pollTimer = 0;
+    speechOn = false;
+    liveEncounterId = autoSubmitId = null;
+    ui.auto.className = '';
+    ui.auto.textContent = 'Auto';
+    ui.record.disabled = false;
+    setAutoStatus('');
+    if (state === 'recording') stopRecording({ discard: true });
+    else {
+      teardownMeter();
+      releaseMic();
+      setState('idle', message || 'Tap to start. Recording stops automatically after five minutes.');
+    }
   }
 
   function blobToBase64(blob) {
@@ -345,12 +554,24 @@
   }
 
   async function onRecorderStop() {
-    teardownMeter();
-    releaseMic();
+    // In automatic mode the microphone and meter stay up: voice activity has
+    // to keep being watched for the next conversation.
+    if (!autoOn) {
+      teardownMeter();
+      releaseMic();
+    }
 
     const seconds = (Date.now() - startedAt) / 1000;
     const blob = new Blob(chunks, { type: chosenMime });
     chunks = [];
+    const encounterId = autoSubmitId;
+    autoSubmitId = null;
+
+    if (discardNext) {
+      discardNext = false;
+      setState('idle', autoOn ? autoHint() : 'Discarded.');
+      return;
+    }
 
     if (seconds < 1 || blob.size < 2000) {
       setState('idle', 'That recording was too short to summarize. Try again and speak for a few seconds.');
@@ -369,7 +590,12 @@
       const res = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ audio: base64, mimeType: chosenMime, durationMs: Math.round(seconds * 1000) }),
+        // encounterId files this note against the conversation the hub
+        // recorded, instead of inventing a second encounter for the audio.
+        body: JSON.stringify({
+          audio: base64, mimeType: chosenMime,
+          durationMs: Math.round(seconds * 1000), encounterId,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || ('Request failed with status ' + res.status));
@@ -461,12 +687,23 @@
     setBanner('');
     ui.result.classList.add('hidden');
     ui.timer.textContent = '0:00';
-    startRecording();
+    // In automatic mode the next recording starts itself, on the next voice.
+    if (autoOn) setState('idle', autoHint());
+    else startRecording();
+  });
+
+  ui.auto.addEventListener('click', () => {
+    if (autoOn) disarmAuto();
+    else armAuto();
   });
 
   // Backgrounding on iOS suspends the audio context and can interrupt capture.
+  // Automatic mode cannot survive it either: no audio context, no voice
+  // activity, so say so rather than appear to still be listening.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && state === 'recording') stopRecording();
+    if (!document.hidden) return;
+    if (state === 'recording') stopRecording();
+    if (autoOn) disarmAuto('Auto mode stopped: this browser suspends audio in the background.');
   });
 
   window.addEventListener('pagehide', releaseMic);

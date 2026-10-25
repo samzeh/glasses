@@ -52,8 +52,8 @@ class TriggerConfig:
     #: ...*and* no face has been seen this long. Separate timeouts, because
     #: people pause and because people look away, and those are different.
     face_timeout_s: float = 30.0
-    #: A provisional encounter with no partner speech by now never becomes
-    #: a conversation.
+    #: A provisional encounter still unpromoted by now never becomes a
+    #: conversation — whether it is missing the speech or missing the dwell.
     expiry_s: float = 30.0
 
 
@@ -171,10 +171,20 @@ class EncounterSession:
             self.current.status = EncounterStatus.CONFIRMED
 
     def _should_expire(self, now_us: int) -> bool:
+        """Any encounter still provisional by now never became a conversation.
+
+        Not just the ones that heard no speech. Speech without dwell — talking
+        with nobody in front of you, a podcast, a voice in the corridor — opens
+        an encounter that can never be promoted, and gating expiry on
+        ``heard_partner`` left it open forever. Nothing noticed while a human
+        bounded every session with the touch pad; on an automatic trigger the
+        first stray noise wedges it, because ``_ensure_open`` keeps handing
+        back the encounter that will not die.
+        """
         if self.current is None or self.current.status is not EncounterStatus.PROVISIONAL:
             return False
         age = now_us - self.current.started_us
-        return age >= seconds_to_us(self.config.expiry_s) and not self.heard_partner
+        return age >= seconds_to_us(self.config.expiry_s)
 
     def _should_close(self, now_us: int) -> bool:
         """Both timeouts must be satisfied, not either.
