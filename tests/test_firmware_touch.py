@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from glasses.device import EspSerialStream, TouchEvent
+from glasses.touch import Action, action_from_gesture
 
 
 def test_firmware_gesture_detector(tmp_path: Path) -> None:
@@ -43,8 +44,12 @@ def test_firmware_output_is_received_by_python(tmp_path: Path) -> None:
     output = subprocess.run([str(executable)], capture_output=True, check=True).stdout
     with EspSerialStream("", stream=io.BytesIO(output)) as device:
         received = [device.read() for _ in range(5)]
-    assert [event.gesture for event in received if isinstance(event, TouchEvent)] == [
-        "single", "double", "long"
+    assert [
+        action_from_gesture(event.gesture) for event in received if isinstance(event, TouchEvent)
+    ] == [
+        Action.ACCEPT,
+        Action.REJECT,
+        Action.SHUTDOWN,
     ]
     assert output.count(b"SNAPSHOT\n") == 1
     assert output.count(b"CAM_ON\n") == 1
