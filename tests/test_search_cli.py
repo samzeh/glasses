@@ -33,7 +33,7 @@ def test_gemini_answer_uses_the_selected_store(tmp_path, monkeypatch, capsys):
     args = parse("--store", str(tmp_path), "ask", "What", "is", "Dan", "planning?")
     assert cmd_ask(args) == 0
     assert seen == [
-        ("What is Dan planning?", tmp_path / "encounters.json", "gemini-3.8-flash", None)
+        ("What is Dan planning?", tmp_path / "encounters.json", "gemini-3.6-flash", None)
     ]
     assert "visit Japan" in capsys.readouterr().out
 

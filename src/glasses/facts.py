@@ -41,8 +41,8 @@ from .voice.transcribe import Utterance
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
-DEFAULT_MODEL = "gemini-3.8-flash"
-FALLBACK_MODELS = ("gemini-3.6-flash", "gemini-3.5-flash")
+DEFAULT_MODEL = "gemini-3.6-flash"
+FALLBACK_MODELS = ("gemini-3.5-flash",)
 
 KEY_HINT = (
     "Set GEMINI_API_KEY (a .env beside the repo is read at startup). "

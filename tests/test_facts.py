@@ -374,6 +374,6 @@ def test_every_model_busy_raises_the_last_failure(monkeypatch):
 
 
 def test_the_requested_model_is_tried_first_and_once(monkeypatch):
-    extractor = F.GeminiExtractor("k", model="gemini-3.8-flash", post=lambda *_: reply([]))
-    assert extractor.models[0] == "gemini-3.8-flash"
-    assert extractor.models.count("gemini-3.8-flash") == 1
+    extractor = F.GeminiExtractor("k", model="gemini-3.6-flash", post=lambda *_: reply([]))
+    assert extractor.models[0] == "gemini-3.6-flash"
+    assert extractor.models.count("gemini-3.6-flash") == 1

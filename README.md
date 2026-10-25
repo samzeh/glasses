@@ -195,7 +195,7 @@ That is not a calibration. `voice-eval` does it properly on your voices.
 
 ## Automatic capture, no buttons
 
-`vision_hub.py` waits for the touch pad. `auto_hub.py` does not wait for
+`vision_hub.py` recognises faces continuously but waits for the touch pad to record. `auto_hub.py` does not wait for
 anything: it decides when a conversation has started and when it has ended.
 
 ```sh
@@ -305,10 +305,13 @@ python vision_hub.py
 ```
 
 The touch module is in toggle mode, so there is no hold: touch twice quickly
-to start a conversation and twice again to end it. A single touch starts or
-stops live recognition. When a saved face appears, the OLED
-shows name, first meeting date, first meeting location (or `Unknown`), and
-one saved fact (or `None saved`). Text scrolls down one pixel every 160 ms.
+to start a conversation and twice again to end it. Outside a conversation the
+hub is always looking for faces; no touch is needed. The OLED only ever shows
+the person in frame: for a saved face, name, first meeting date, first meeting
+location (or `Unknown`), and one saved fact (or `None saved`); `Unknown person`
+for a face it does not know; and a blank screen when nobody is there (after a
+3 s hold, so a turned head does not restart the scroll). Hub status (recording,
+saving, camera problems) is printed in the terminal, never on the OLED. Text scrolls down one pixel every 160 ms.
 Set `GLASSES_PREVIEW=1` to open camera debug windows with a GUI OpenCV build.
 
 Older versions could index full transcripts in Elastic. This version does

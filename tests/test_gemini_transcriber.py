@@ -22,7 +22,7 @@ def test_transcription_uses_gemini_audio_without_writing_a_file():
     transcriber = GeminiTranscriber("test-key", post=post)
     assert transcriber.transcribe(np.zeros(16_000, dtype=np.float32)) == "I plan to visit Japan."
     url, headers, payload = requests[0]
-    assert "gemini-3.8-flash:generateContent" in url
+    assert "gemini-3.6-flash:generateContent" in url
     assert headers["x-goog-api-key"] == "test-key"
     audio_part = payload["contents"][0]["parts"][1]["inlineData"]
     assert audio_part["mimeType"] == "audio/wav"

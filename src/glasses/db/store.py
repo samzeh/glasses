@@ -471,6 +471,72 @@ class PgStore:
             )
             return [(row[0], int(row[1]), int(row[2]), float(row[3])) for row in cursor.fetchall()]
 
+    # --- facts -------------------------------------------------------------
+
+    def add_facts(self, encounter_id: str, person_id: str | None, facts: list[Any]) -> int:
+        """Store extracted ``PersonFact``s against one person and encounter.
+
+        A value this person already has is skipped, so repeating yourself in
+        a second conversation does not grow the profile.
+        """
+        added = 0
+        with self._connection.transaction(), self._connection.cursor() as cursor:
+            for fact in facts:
+                value = fact.value.strip()
+                if not value:
+                    continue
+                cursor.execute(
+                    "SELECT 1 FROM fact WHERE person_id IS NOT DISTINCT FROM %s::uuid "
+                    "AND kind = %s AND lower(value) = lower(%s) AND superseded_by IS NULL",
+                    (person_id, fact.kind, value),
+                )
+                if cursor.fetchone():
+                    continue
+                cursor.execute(
+                    """
+                    INSERT INTO fact (person_id, encounter_id, kind, value, evidence_span,
+                                      evidence_start_ms, evidence_end_ms, confidence)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        person_id,
+                        encounter_id,
+                        fact.kind,
+                        value,
+                        fact.evidence_span,
+                        fact.evidence_start_ms,
+                        fact.evidence_end_ms,
+                        float(fact.confidence),
+                    ),
+                )
+                added += 1
+        return added
+
+    def facts_of(self, person_id: str) -> list[dict[str, Any]]:
+        """A person's current facts, oldest first."""
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT kind, value, confidence, extracted_at
+                FROM fact WHERE person_id = %s AND superseded_by IS NULL
+                ORDER BY extracted_at
+                """,
+                (person_id,),
+            )
+            columns = [c.name for c in cursor.description]
+            return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+    def first_met(self, person_id: str) -> datetime | None:
+        """When this person was first seen: their oldest fact or their creation."""
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT least((SELECT min(extracted_at) FROM fact WHERE person_id = %s), "
+                "created_at) FROM person WHERE id = %s",
+                (person_id, person_id),
+            )
+            row = cursor.fetchone()
+        return row[0] if row else None
+
     # --- the live view -----------------------------------------------------
 
     def refresh_aggregates(self, since: datetime | None = None) -> None:

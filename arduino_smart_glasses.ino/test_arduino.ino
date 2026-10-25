@@ -4,7 +4,10 @@
 
 // The glasses talk to the laptop over the USB cable at 115200 baud:
 //   out  SNAPSHOT, CAM_ON, CAM_OFF   one touch event per line
-//   in   PROFILE:... or STATUS:...   one display line for the OLED
+//   in   PROFILE:... or STATUS:...   what to show for the person in frame
+//        CLEAR                       nobody in frame: blank the screen
+// The screen only ever shows the person in front of you; hub state
+// (recording, saving) is printed in the laptop terminal instead.
 
 // ESP32-S3 touch input and 128x64 I2C OLED (SSD1306, address 0x3C).
 const int TOUCH_PIN = 5;
@@ -128,6 +131,8 @@ void handleMessage(String message) {
     showProfile(message.substring(8));
   } else if (message.startsWith("STATUS:")) {
     showStatus(message.substring(7));
+  } else if (message == "CLEAR") {
+    showStatus("");
   }
 }
 
@@ -149,7 +154,7 @@ void setup() {
   displayReady = oledAnswers && display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   if (oledAnswers && !displayReady) Serial.println("OLED_INIT_FAILED");
 
-  showStatus("Glasses ready");
+  showStatus("");  // blank until someone is in frame
 }
 
 void loop() {
@@ -166,7 +171,6 @@ void loop() {
     if (touchPending && now - firstTouchMs <= DOUBLE_TOUCH_MS) {
       touchPending = false;
       systemActive = !systemActive;
-      showStatus(systemActive ? "Recording..." : "Saving meeting...");
       Serial.println(systemActive ? "CAM_ON" : "CAM_OFF");
     } else {
       touchPending = true;
@@ -176,7 +180,6 @@ void loop() {
   if (touchPending && now - firstTouchMs > DOUBLE_TOUCH_MS) {
     touchPending = false;
     Serial.println("SNAPSHOT");
-    showStatus("Looking...");
   }
 
   if (Serial.available()) {
