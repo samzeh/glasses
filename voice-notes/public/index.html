@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Voice Notes</title>
+<meta name="description" content="Record a voice note, get a spoken summary back." />
+<style>
+  :root {
+    --bg: #f7f7f8;
+    --surface: #ffffff;
+    --text: #18181b;
+    --muted: #6b7280;
+    --border: #e4e4e7;
+    --accent: #4f46e5;
+    --accent-text: #ffffff;
+    --rec: #dc2626;
+    --ok: #059669;
+    --err: #b91c1c;
+    --meter: #4f46e5;
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #09090b; --surface: #18181b; --text: #f4f4f5; --muted: #a1a1aa;
+      --border: #27272a; --accent: #6366f1; --rec: #ef4444; --ok: #10b981;
+      --err: #f87171; --meter: #818cf8;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #09090b; --surface: #18181b; --text: #f4f4f5; --muted: #a1a1aa;
+    --border: #27272a; --accent: #6366f1; --rec: #ef4444; --ok: #10b981;
+    --err: #f87171; --meter: #818cf8;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    padding: max(20px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
+    display: flex; justify-content: center;
+  }
+  main { width: 100%; max-width: 560px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 22px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px; margin-bottom: 14px;
+  }
+  .stage { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  #meter { width: 100%; height: 64px; display: block; border-radius: 8px; background: transparent; }
+  .timer { font-variant-numeric: tabular-nums; font-size: 2rem; font-weight: 600; letter-spacing: -0.02em; }
+  .timer.idle { color: var(--muted); }
+  .hint { color: var(--muted); font-size: 0.85rem; text-align: center; min-height: 1.3em; margin: 0; }
+  button {
+    font: inherit; font-weight: 600; border: 1px solid var(--border);
+    border-radius: 999px; padding: 13px 26px; cursor: pointer;
+    background: var(--surface); color: var(--text); transition: transform 0.08s ease, opacity 0.15s ease;
+  }
+  button:active:not(:disabled) { transform: scale(0.97); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; min-width: 190px; }
+  button.danger { background: var(--rec); color: #fff; border-color: transparent; min-width: 190px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > button { flex: 1 1 auto; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--rec); display: inline-block; margin-right: 7px; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }
+  .recording .dot { animation: pulse 1.3s ease-in-out infinite; }
+  h2 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin: 0 0 8px; }
+  .summary { font-size: 1.06rem; white-space: pre-wrap; margin: 0; }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; }
+  .transcript { white-space: pre-wrap; color: var(--muted); font-size: 0.9rem; margin: 10px 0 0; }
+  .err { color: var(--err); }
+  .hidden { display: none !important; }
+  .spin { display: inline-block; width: 15px; height: 15px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%; animation: rot 0.8s linear infinite;
+    vertical-align: -3px; margin-right: 8px; }
+  @keyframes rot { to { transform: rotate(360deg) } }
+  .banner { font-size: 0.85rem; padding: 11px 13px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--err); margin-bottom: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Voice Notes</h1>
+  <p class="sub">Record a note. Get a spoken summary back.</p>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <div class="card stage" id="stage">
+    <canvas id="meter" width="520" height="64" aria-hidden="true"></canvas>
+    <div class="timer idle" id="timer">0:00</div>
+    <div class="row" style="width:100%">
+      <button class="primary" id="record">Start recording</button>
+    </div>
+    <p class="hint" id="hint">Tap to start. Recording stops automatically after five minutes.</p>
+  </div>
+
+  <div class="card hidden" id="result">
+    <h2>Summary</h2>
+    <p class="summary" id="summary"></p>
+    <div class="row" style="margin-top:16px">
+      <button id="play">Play summary</button>
+      <button id="again">Record another</button>
+    </div>
+    <details id="transcriptWrap" class="hidden">
+      <summary>Show transcript</summary>
+      <p class="transcript" id="transcript"></p>
+    </details>
+  </div>
+</main>
+
+<script>
+(() => {
+  'use strict';
+
+  const MAX_SECONDS = 300;
+  const MIME_CANDIDATES = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4;codecs=mp4a.40.2',
+    'audio/mp4',
+    'audio/ogg;codecs=opus',
+  ];
+
+  const el = (id) => document.getElementById(id);
+  const ui = {
+    stage: el('stage'), meter: el('meter'), timer: el('timer'), record: el('record'),
+    hint: el('hint'), result: el('result'), summary: el('summary'), play: el('play'),
+    again: el('again'), transcriptWrap: el('transcriptWrap'), transcript: el('transcript'),
+    banner: el('banner'),
+  };
+
+  let state = 'idle';
+  let stream = null, recorder = null, chunks = [], chosenMime = '';
+  let audioCtx = null, analyser = null, rafId = 0, levels = null;
+  let tickId = 0, startedAt = 0;
+  let summaryText = '';
+  let player = null;        // reused <audio>, created on a user gesture for iOS
+  let spokenUnlocked = false;
+
+  function setBanner(message) {
+    ui.banner.textContent = message || '';
+    ui.banner.classList.toggle('hidden', !message);
+  }
+
+  function fmt(totalSeconds) {
+    const m = Math.floor(totalSeconds / 60);
+    const s = Math.floor(totalSeconds % 60);
+    return m + ':' + String(s).padStart(2, '0');
+  }
+
+  function pickMime() {
+    if (typeof MediaRecorder === 'undefined') return null;
+    for (const candidate of MIME_CANDIDATES) {
+      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(candidate)) return candidate;
+    }
+    return '';  // let the browser choose its own default
+  }
+
+  function setState(next, hint) {
+    state = next;
+    ui.stage.classList.toggle('recording', next === 'recording');
+    ui.timer.classList.toggle('idle', next !== 'recording');
+    const busy = next === 'requesting' || next === 'processing';
+    ui.record.disabled = busy;
+    if (next === 'recording') {
+      ui.record.className = 'danger';
+      ui.record.innerHTML = '<span class="dot"></span>Stop and summarize';
+    } else if (busy) {
+      ui.record.className = 'primary';
+      ui.record.innerHTML = '<span class="spin"></span>' + (next === 'requesting' ? 'Waiting for mic' : 'Summarizing');
+    } else {
+      ui.record.className = 'primary';
+      ui.record.textContent = 'Start recording';
+    }
+    if (hint !== undefined) {
+      ui.hint.textContent = hint;
+      ui.hint.classList.toggle('err', next === 'error');
+    }
+  }
+
+  // iOS blocks speech and audio that does not originate in a user gesture.
+  // The summary arrives seconds after the tap, so claim both channels now.
+  function unlockAudioOutput() {
+    if (!player) {
+      player = new Audio();
+      player.preload = 'auto';
+    }
+    if (!spokenUnlocked && 'speechSynthesis' in window) {
+      try {
+        const warm = new SpeechSynthesisUtterance(' ');
+        warm.volume = 0;
+        speechSynthesis.speak(warm);
+        spokenUnlocked = true;
+      } catch { /* not fatal */ }
+    }
+  }
+
+  function drawMeter() {
+    const canvas = ui.meter;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = canvas.clientWidth || 520;
+    if (canvas.width !== Math.round(cssWidth * dpr)) {
+      canvas.width = Math.round(cssWidth * dpr);
+      canvas.height = Math.round(64 * dpr);
+    }
+    const w = canvas.width, h = canvas.height;
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--meter').trim() || '#4f46e5';
+
+    const render = () => {
+      rafId = requestAnimationFrame(render);
+      ctx.clearRect(0, 0, w, h);
+      if (!analyser) return;
+      analyser.getByteFrequencyData(levels);
+      const bars = 48;
+      const gap = 2 * dpr;
+      const barWidth = (w - gap * (bars - 1)) / bars;
+      ctx.fillStyle = accent;
+      for (let i = 0; i < bars; i++) {
+        const idx = Math.floor((i / bars) * levels.length * 0.7);
+        const magnitude = levels[idx] / 255;
+        const barHeight = Math.max(2 * dpr, magnitude * h * 0.92);
+        const x = i * (barWidth + gap);
+        const y = (h - barHeight) / 2;
+        const r = Math.min(barWidth / 2, 2 * dpr);
+        ctx.beginPath();
+        ctx.roundRect ? ctx.roundRect(x, y, barWidth, barHeight, r) : ctx.rect(x, y, barWidth, barHeight);
+        ctx.fill();
+      }
+    };
+    render();
+  }
+
+  function teardownMeter() {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = 0;
+    analyser = null;
+    if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+    const ctx = ui.meter.getContext('2d');
+    ctx.clearRect(0, 0, ui.meter.width, ui.meter.height);
+  }
+
+  function releaseMic() {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = null;
+  }
+
+  function stopTimer() {
+    if (tickId) clearInterval(tickId);
+    tickId = 0;
+  }
+
+  async function startRecording() {
+    setBanner('');
+    ui.result.classList.add('hidden');
+    unlockAudioOutput();
+    setState('requesting', 'Allow microphone access to continue.');
+
+    chosenMime = pickMime();
+    if (chosenMime === null) {
+      setState('error', 'This browser cannot record audio. Try Chrome or Safari.');
+      return;
+    }
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+    } catch (err) {
+      const name = err && err.name;
+      const message = name === 'NotAllowedError'
+        ? 'Microphone access was blocked. Enable it for this site in your browser settings, then reload.'
+        : name === 'NotFoundError'
+          ? 'No microphone was found on this device.'
+          : 'Could not open the microphone: ' + (name || 'unknown error');
+      setState('error', message);
+      return;
+    }
+
+    // A device unplugged or an interrupting call ends the track mid-recording.
+    stream.getAudioTracks().forEach((track) => {
+      track.addEventListener('ended', () => {
+        if (state === 'recording') stopRecording();
+      });
+    });
+
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.75;
+      levels = new Uint8Array(analyser.frequencyBinCount);
+      audioCtx.createMediaStreamSource(stream).connect(analyser);
+      drawMeter();
+    } catch { /* the meter is cosmetic; recording continues without it */ }
+
+    chunks = [];
+    try {
+      recorder = chosenMime
+        ? new MediaRecorder(stream, { mimeType: chosenMime })
+        : new MediaRecorder(stream);
+    } catch {
+      recorder = new MediaRecorder(stream);
+    }
+    chosenMime = recorder.mimeType || chosenMime || 'audio/webm';
+
+    recorder.addEventListener('dataavailable', (event) => {
+      if (event.data && event.data.size > 0) chunks.push(event.data);
+    });
+    recorder.addEventListener('stop', onRecorderStop);
+    recorder.start(1000);   // one-second chunks survive a crash mid-recording
+
+    startedAt = Date.now();
+    ui.timer.textContent = '0:00';
+    tickId = setInterval(() => {
+      const elapsed = (Date.now() - startedAt) / 1000;
+      ui.timer.textContent = fmt(elapsed);
+      if (elapsed >= MAX_SECONDS) stopRecording();
+    }, 200);
+
+    setState('recording', 'Listening. Tap stop when you are done.');
+  }
+
+  function stopRecording() {
+    if (!recorder || recorder.state === 'inactive') return;
+    stopTimer();
+    setState('processing', 'Sending to the model. This usually takes a few seconds.');
+    recorder.stop();
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Could not read the recording.'));
+      reader.onload = () => {
+        const result = String(reader.result);
+        const comma = result.indexOf(',');
+        resolve(comma === -1 ? result : result.slice(comma + 1));
+      };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function onRecorderStop() {
+    teardownMeter();
+    releaseMic();
+
+    const seconds = (Date.now() - startedAt) / 1000;
+    const blob = new Blob(chunks, { type: chosenMime });
+    chunks = [];
+
+    if (seconds < 1 || blob.size < 2000) {
+      setState('idle', 'That recording was too short to summarize. Try again and speak for a few seconds.');
+      return;
+    }
+
+    let base64;
+    try {
+      base64 = await blobToBase64(blob);
+    } catch (err) {
+      setState('error', err.message);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/summarize', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ audio: base64, mimeType: chosenMime }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ('Request failed with status ' + res.status));
+
+      summaryText = data.summary || '';
+      ui.summary.textContent = summaryText;
+      ui.result.classList.remove('hidden');
+      if (data.transcript) {
+        ui.transcript.textContent = data.transcript;
+        ui.transcriptWrap.classList.remove('hidden');
+      } else {
+        ui.transcriptWrap.classList.add('hidden');
+      }
+      setState('idle', 'Done. Play the summary or record another.');
+      ui.timer.textContent = fmt(seconds);
+      speak(summaryText, { auto: true });
+    } catch (err) {
+      setState('error', err.message || 'Something went wrong talking to the server.');
+    }
+  }
+
+  // Prefer the model's voice. Fall back to the browser's own if that call
+  // fails, so the demo never ends in silence.
+  async function speak(text, options) {
+    if (!text) return;
+    const auto = options && options.auto;
+    ui.play.disabled = true;
+    ui.play.textContent = 'Loading voice';
+    try {
+      const res = await fetch('/api/speak', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error('tts unavailable');
+      const data = await res.json();
+      if (!data.audio) throw new Error('tts empty');
+      if (!player) player = new Audio();
+      player.src = 'data:audio/wav;base64,' + data.audio;
+      ui.play.textContent = 'Play summary';
+      ui.play.disabled = false;
+      try {
+        await player.play();
+      } catch {
+        // Autoplay refused, which is normal on iOS. The button still works.
+        if (auto) setBanner('Tap "Play summary" to hear it. This browser blocks automatic playback.');
+      }
+    } catch {
+      ui.play.textContent = 'Play summary';
+      ui.play.disabled = false;
+      speakWithBrowser(text, auto);
+    }
+  }
+
+  function speakWithBrowser(text, auto) {
+    if (!('speechSynthesis' in window)) {
+      if (auto) setBanner('This browser cannot speak the summary. The text is above.');
+      return;
+    }
+    try {
+      speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
+      speechSynthesis.speak(utterance);
+    } catch {
+      if (auto) setBanner('Could not play the summary aloud. The text is above.');
+    }
+  }
+
+  ui.record.addEventListener('click', () => {
+    if (state === 'recording') stopRecording();
+    else if (state !== 'requesting' && state !== 'processing') startRecording();
+  });
+
+  ui.play.addEventListener('click', () => {
+    unlockAudioOutput();
+    setBanner('');
+    if (player && player.src) {
+      player.currentTime = 0;
+      player.play().catch(() => speakWithBrowser(summaryText, false));
+    } else {
+      speak(summaryText, { auto: false });
+    }
+  });
+
+  ui.again.addEventListener('click', () => {
+    if (player) player.pause();
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    setBanner('');
+    ui.result.classList.add('hidden');
+    ui.timer.textContent = '0:00';
+    startRecording();
+  });
+
+  // Backgrounding on iOS suspends the audio context and can interrupt capture.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && state === 'recording') stopRecording();
+  });
+
+  window.addEventListener('pagehide', releaseMic);
+
+  if (!window.isSecureContext) {
+    setBanner('This page is not on HTTPS, so the microphone will not open. See the README for the tunnel step.');
+  }
+
+  fetch('/api/health')
+    .then((r) => r.json())
+    .then((d) => { if (!d.keyConfigured) setBanner('The server has no GEMINI_API_KEY set. Add it to .env and restart.'); })
+    .catch(() => {});
+
+  setState('idle');
+})();
+</script>
+</body>
+</html>
