@@ -103,6 +103,11 @@ def test_every_subcommand_parses():
         assert parse(*argv).command == argv[0]
 
 
+def test_remember_partner_count_parses_and_defaults_to_none():
+    assert parse("remember", "conversation.wav").partners is None
+    assert parse("remember", "--partners", "1", "conversation.wav").partners == 1
+
+
 def test_transcript_indexing_is_not_exposed():
     with pytest.raises(SystemExit):
         parse("search-index", "conversation.wav")

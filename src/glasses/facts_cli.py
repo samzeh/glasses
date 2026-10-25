@@ -31,6 +31,12 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     remember.add_argument("--encounter", default=None, help="encounter id (default: a new one)")
     remember.add_argument("--diarize", action="store_true", help="several speakers")
     remember.add_argument("--speakers", type=int, default=None, help="how many, if known")
+    remember.add_argument(
+        "--partners",
+        type=int,
+        default=None,
+        help="how many other people were present, to merge surplus speaker clusters",
+    )
     remember.add_argument("--gemini-model", default=None, help="Gemini model for memory processing")
     remember.add_argument(
         "--no-enroll",
