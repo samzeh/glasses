@@ -1,9 +1,13 @@
 """Command line entry point: ``glasses <command>``.
 
-This is the M0 harness — enough to enroll yourself from the webcam or a few
-photos, then see who the pipeline thinks it is looking at. It is not the product:
-there is no ESP, no encounter, no audio. It exists so the thresholds can be
-calibrated against real frames before any of that is built.
+Glasses that recognise the people you meet and recall what you know about
+them. ``enroll`` teaches it a face and a voice, ``meet`` records an
+encounter and turns it into facts, and ``ask`` answers questions about the
+people in it.
+
+The pipeline runs on a laptop and the ESP32-S3 firmware lives beside it in
+``arduino_smart_glasses.ino/``. Thresholds here are calibrated against
+real frames, not benchmark photographs.
 """
 
 from __future__ import annotations

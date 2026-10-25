@@ -21,3 +21,6 @@ models/
 
 # local M0 gallery
 glasses-store/
+
+# Agent worktrees: whole copies of this repo, never part of it.
+.claude/

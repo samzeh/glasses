@@ -210,6 +210,30 @@ glasses search-seed                   # four synthetic encounters to ask about
 glasses ask "who have I met who works in biotech"
 ```
 
+### `glasses meet` — the whole loop in one command
+
+`remember` works from audio alone. `meet` adds the camera, which is where
+identity actually comes from: a voiceprint barely separates two people on
+this hardware (same-speaker 0.79-0.96 against different-speaker 0.58-0.82),
+while a face clears its threshold by 2x.
+
+```sh
+glasses meet --remember --diarize --seconds 60 --dry-run --save-audio
+```
+
+It records camera and microphone on one clock, tracks every face, uses
+lip-sync to decide which visible face produced each utterance, transcribes
+each one, extracts facts, and indexes both halves. `--dry-run` prints
+everything and indexes nothing; `--save-audio` keeps the take.
+
+Two things it works out for itself. **The camera is the census**: the wearer
+is behind it and never in frame, so the faces seen at once are the other
+people present — which is how the surplus speaker clusters get folded back
+together, since diarization over-splits badly (six clusters for a
+two-person conversation). And **a stranger who introduces themselves is
+enrolled from the conversation**, face first, so the next encounter
+recognises them without anyone adding a contact.
+
 ### From a real conversation, not the seed
 
 `search-seed` is synthetic, and the agent will say so when asked. To ask
@@ -328,9 +352,10 @@ Real recordings go in the same indices as `source: "capture"`:
 glasses search-index conversation.wav --location "Cal Hacks"
 ```
 
-Facts are not extracted from real audio yet — the `fact` table and its
-mapping exist, the extractor does not — so `search-index` writes segments
-only. Segments alone already answer "what did Dan say he'd send me?".
+Facts are extracted from real audio by `glasses remember` and
+`glasses meet --remember`, which transcribe, extract with Gemini, and index
+both halves. Segments alone already answer "what did Dan say he'd send
+me?"; facts make the answer short enough to read on a glance.
 
 ### Runbook: pointing it at an Elastic Serverless project
 
@@ -391,6 +416,7 @@ from a file in this repo.
 | `glasses forget-voice "Sam"` | drop a bad voice enrollment, keep the face one |
 | `glasses voice-compare a.wav b.wav` | pairwise similarity between recordings |
 | `glasses transcribe audio/` | who said what, attributed, via Cartesia (`--mic` to listen now) |
+| `glasses meet --remember` | **the whole loop**: camera + mic, bind speech to a face, extract facts, index |
 | `glasses remember audio/` | transcribe, extract facts with Gemini, index both (`--dry-run` to look first) |
 | `glasses transcribe audio/ --local` | the same, on local Whisper — no key, no network |
 | `glasses voice-eval recordings/` | calibrate `accept_threshold` on your own voices |
@@ -585,9 +611,15 @@ templates sat in the table.
 ## What is built
 
 Server-side face recognition only — the six stages of the PRD's hot loop, plus
-the schema and the measurement harness they depend on. Nothing else from the
-PRD exists yet: no firmware, no ingest, no trigger, no audio pipeline, no
-identity resolution, no surfacing.
+the schema and the measurement harness they depend on — plus the voice
+pipeline, the encounter clock, fact extraction, the Elastic recall layer and
+the TigerData schema that followed it. ESP32-S3 firmware lives in
+`arduino_smart_glasses.ino/` alongside `vision_hub.py`.
+
+Still missing from the PRD: the dwell-and-speech trigger is written
+(`encounter/session.py`) but nothing calls it, nothing writes the
+observation hypertables yet, and there is no HUD — recall surfaces in a
+terminal.
 
 ```
 src/glasses/
@@ -735,7 +767,7 @@ will not notice without the chart.
 - Yaw and pitch come from a landmark heuristic whose constants are calibrated
   on 6 faces. A weak-perspective PnP solve against a canonical 3D 5-point
   model is the principled upgrade, once there is a held-out set to score it on.
-- `watch` has been exercised on still images but not on a live camera here.
+- `watch` and `meet` have both been run against a live camera.
 - The voice threshold is supported by three recordings of two people, in
   Chinese, through an English-trained model. Run `voice-eval` before relying
   on a name.
@@ -750,16 +782,21 @@ will not notice without the chart.
   degradation of the current crop, which is what far-field audio needs.
 - `PgVectorGallery` and cloud migration are covered by the database integration
   tests, which require `DATABASE_URL` and run in an isolated schema.
-- **The whole Elastic path is unverified against a live cluster.** No
-  request in `glasses.search` has ever left the process: the tests run
-  against a fake transport, and the request shapes come from Elastic's
+- The Elastic path is verified against a live Elasticsearch 9.6 serverless
+  project: indices created, six tools and the agent applied, and the agent
+  answering questions from them. One shape was wrong until it was run —
+  ES|QL tool params are typed `string`, not the `keyword` of Elastic's own
+  spec examples. What remains unverified is every request shape
+  `glasses.search` does not send, whose definitions still come from Elastic's
   docs rather than from a response. The specific things to expect to
   debug are the Kibana-vs-Elasticsearch base URL, whether `PUT
   /api/agent_builder/tools/{id}` accepts each definition as written, and
   whether `TO_LOWER(value.keyword) LIKE ?value` is accepted in an ES|QL
   tool.
-- Facts are only ever seeded. Nothing extracts a fact from a real
-  transcript yet, so `search-index` indexes segments and no facts.
+- Facts are extracted from real transcripts by `glasses.facts` (Gemini,
+  structured output, verified live). `search-seed` still exists for demo
+  data and tags everything `source: seed`, which the agent will tell you
+  about when asked.
 - Elastic holds a copy, and the sync is manual. There is no trigger that
   indexes an encounter when it closes; `search-index` and `search-seed`
   are run by hand.
