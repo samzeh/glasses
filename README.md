@@ -134,6 +134,10 @@ expires, or a conference network refuses to resolve anything, and either way
 a slightly worse transcript beats no transcript — so a failed call falls back
 to local Whisper mid-run and says so.
 
+Those defaults apply to the standalone `glasses transcribe conversation.wav` command. The
+`meet --remember` and `remember` memory flows use Gemini for transcription
+and fact extraction.
+
 Nothing extra to install: the `cartesia` extra resolves to the same voice
 stack, because the API call is one multipart POST and `urllib` already does
 that. Segmentation and speaker embedding still run locally — Cartesia
@@ -189,54 +193,49 @@ sherpa-onnx's own example default, and it is correct on the three-recording
 real-speech sample this was tested against (genuine 0.658, impostor 0.584).
 That is not a calibration. `voice-eval` does it properly on your voices.
 
-## Recall: ask about the people you have met
+## Recall: short memories about people
 
-The separate [Voice Notes web app](voice-notes/README.md) saves its recordings,
-transcripts, and summaries in TigerData. It does not currently index those notes
-in Elastic, so `glasses ask` does not search them.
+The separate [Voice Notes web app](voice-notes/README.md) saves recordings,
+transcripts, and summaries in TigerData. Those notes are not part of the
+`glasses ask` memory store.
 
-Recognition answers *who is in front of me*. Recall answers the other
-question — *who have I met who works in biotech?* — and it is a search
-problem, not a recognition one. The transcripts already exist, attributed
-per speaker; what was missing was somewhere to ask them from.
+Gemini transcribes a conversation in memory, then selects facts
+that will help in a later conversation. The transcript is discarded after
+extraction. The saved file is `glasses-store/encounters.json`, keyed by person
+ID so two people with the same name remain separate.
 
-That somewhere is Elastic, with an [Elastic Agent
-Builder](https://www.elastic.co/docs/explore-analyze/ai-features/elastic-agent-builder)
-agent in front of it:
+Facts are grouped by category: name, age, school, employer, role, occupation,
+industry, hobbies, interests, family, plans, favorites, projects, goals,
+commitments, location, and relationships. A `topic` refines a category
+(for example, favorite movie or a plan for next summer). Each value is a short
+phrase with confidence and the date it was learned. Meeting date and location
+are saved separately. The OLED chooses one hobby, favorite, project, or work
+fact for its compact display.
 
-```sh
-export ELASTIC_URL='https://my-project.es.us-east-1.aws.elastic.cloud'
-export ELASTIC_API_KEY='…'
-
-glasses search-setup                  # create the two indices
-glasses agent-setup                   # apply the tools and the agent
-glasses search-seed                   # four synthetic encounters to ask about
-glasses ask "who have I met who works in biotech"
-```
-
-### `glasses meet` — the whole loop in one command
-
-`remember` works from audio alone. `meet` adds the camera, which is where
-identity actually comes from: a voiceprint barely separates two people on
-this hardware (same-speaker 0.79-0.96 against different-speaker 0.58-0.82),
-while a face clears its threshold by 2x.
+Put your Gemini key in a `.env` file beside this repository:
 
 ```sh
-glasses meet --remember --diarize --seconds 60 --dry-run --save-audio
+GEMINI_API_KEY=your-key
 ```
 
-It records camera and microphone on one clock, tracks every face, uses
-lip-sync to decide which visible face produced each utterance, transcribes
-each one, extracts facts, and indexes both halves. `--dry-run` prints
-everything and indexes nothing; `--save-audio` keeps the take.
+The CLI and `vision_hub.py` load this file at startup. Gemini 3.8 Flash is
+used by default for both extraction and questions.
 
-Two things it works out for itself. **The camera is the census**: the wearer
-is behind it and never in frame, so the faces seen at once are the other
-people present — which is how the surplus speaker clusters get folded back
-together, since diarization over-splits badly (six clusters for a
-two-person conversation). And **a stranger who introduces themselves is
-enrolled from the conversation**, face first, so the next encounter
-recognises them without anyone adding a contact.
+```sh
+glasses meet --remember --seconds 60 --location "Cal Hacks"
+glasses remember conversation.wav --location "Cal Hacks"
+glasses person "Dan Kim"                    # organized facts, no API call
+glasses person "Dan Kim" --kind plan
+glasses ask "What is Dan building and what should I ask him next?"
+glasses ask --person "Dan Kim" "What should I follow up on?"
+```
+
+`meet` uses camera and microphone together: lip sync attributes speech to a
+visible face, Gemini extracts selected facts, and the face ID becomes the
+memory key. `remember` works from audio and uses enrolled voice identities.
+`ask --person` sends only that person's saved facts to Gemini.
+`--dry-run` previews extracted facts without saving a profile. Audio is only
+saved if you explicitly request an audio file.
 
 ### ESP32 OLED recall
 
@@ -252,235 +251,16 @@ export GLASSES_LOCATION='Cal Hacks'              # optional meeting location
 python vision_hub.py
 ```
 
-Set `GLASSES_PREVIEW=1` to also open the camera debug windows with a GUI
-OpenCV build. The OLED flow runs without those windows.
-
-Hold the touch pad to start a conversation and hold again to end it. At the
-end, the host transcribes speech, extracts facts when `GEMINI_API_KEY` is set,
-and saves a small local profile in `glasses-store/encounters.json`. A short
+Hold the touch pad to start a conversation and hold again to end it. A short
 tap starts or stops live recognition. When a saved face appears, the OLED
-shows their name, first meeting date, first meeting location (or `Unknown`),
-and one saved interest or work fact (or `None saved`). The text scrolls down
-one pixel every 160 ms. The host also indexes the full transcript and facts
-in Elastic when configured; the OLED profile works without Elastic.
+shows name, first meeting date, first meeting location (or `Unknown`), and
+one saved fact (or `None saved`). Text scrolls down one pixel every 160 ms.
+Set `GLASSES_PREVIEW=1` to open camera debug windows with a GUI OpenCV build.
 
-### From a real conversation, not the seed
-
-`search-seed` is synthetic, and the agent will say so when asked. To ask
-about something that actually happened, `remember` runs the whole cold loop
-in one command — identify the speakers, transcribe each segment, extract the
-durable facts with Gemini, index both halves:
-
-```sh
-export GEMINI_API_KEY='…'             # aistudio.google.com/apikey
-
-glasses remember conversation.wav --location "Cal Hacks"
-glasses remember --mic --seconds 120 --diarize --speakers 2
-glasses remember conversation.wav --dry-run   # see the facts, index nothing
-```
-
-`remember` and `ask` are the two ends of the same thing: one puts a
-conversation somewhere, the other gets it back.
-
-Three rules decide what becomes a fact, and all three come from the PRD.
-Every fact keeps the sentence it came from, because a profile that asserts
-something wrong is only correctable if you can see what caused it. A fact is
-attached to a person **here, in code**, by mapping the speaker label back to
-the identity the gallery resolved — the model never sees a `person_id`, and
-where the subject is ambiguous the fact belongs to the encounter rather than
-to a guess. And the confidence floor is deliberately high: far-field audio in
-a noisy room garbles transcripts, and a confidently wrong fact surfaced at the
-wrong moment is worse than an empty profile.
-
-The shape of the answer — the agent writes the prose, so the wording will
-differ:
-
-```
-? who have I met who works in biotech
-
-  Dan Kim — Helix Bio, "a biotech company doing protein design". Cal Hacks,
-  24 Oct. He also said he would send you the benchmark dataset and a preprint.
-
-  Marcus Webb — research scientist at Verida Therapeutics, "biotech,
-  immunology side". Cal Hacks, 24 Oct, about an hour later.
-
-  · glasses_find_people_by_fact(kind='industry', value='*biotech*')
-  · glasses_get_person_facts(person='*dan*')
-
-  2.1s  ·  conversation 9f3a…
-```
-
-The tool calls are printed on purpose. An answer that names the queries
-behind it is one the audience can check, and it is the first thing to read
-when the answer is wrong.
-
-### Elastic's role today
-
-```
-TigerData                 Elastic                   Agent Builder
-people, face/voice   |    transcript segments  →    glasses ask "…"
-templates, Voice Notes   person facts
-```
-
-The intended architecture treats Elastic as a searchable copy of TigerData.
-The current CLI does not complete that sync: `glasses meet --remember` and
-`glasses remember` write transcript segments and extracted facts directly to
-Elastic, without saving those records in TigerData. Do not delete the Elastic
-indices expecting to rebuild them from TigerData. Voice Notes takes the other
-path: it saves recordings, transcripts, and summaries in TigerData but does not
-index them in Elastic. `glasses ask` therefore searches only the CLI's indexed
-conversations, not Voice Notes.
-
-Two document types, both with deterministic ids so that re-running the
-sync overwrites rather than duplicates:
-
-| | fields |
-|---|---|
-| `transcript_segment` | text, person, encounter, start/end ms, `is_wearer`, location, time |
-| `person_fact` | kind, value, person, encounter, `evidence_span`, confidence |
-
-`is_wearer` is carried through everything and the agent is instructed
-about it explicitly: your own speech must never become a fact about the
-person opposite. `person_id` is nullable on both, matching
-`db/schema.sql` — an unidentified speaker and an unassigned fact are real
-states, and they stay searchable rather than being resolved by a guess.
-
-### The agent's tools are code, not clicks
-
-`src/glasses/search/agentbuilder.py` holds the six tool definitions and
-the agent's instructions. `glasses agent-setup` applies them and is
-idempotent: edit the file, run it again. `--dry-run` prints exactly what
-would be sent and needs no credentials at all, which is how the
-definitions get reviewed:
-
-```sh
-glasses agent-setup --dry-run
-```
-
-Two `index_search` tools do the open questions — Elastic picks keyword,
-semantic or hybrid retrieval itself, which beats a hand-written full-text
-query. Four `esql` tools do the precise ones (one person's facts, one
-person's utterances, who was at a place, who matches a fact), because
-those are exact filters that should return the same rows every time, with
-the evidence columns rather than a relevance-ranked blob.
-
-### Seed data is obviously synthetic
-
-A recall demo needs a past, and the honest way to get one is to fabricate
-it openly rather than to record strangers so a demo looks better. Every
-seeded document carries `source: "seed"`, every person id starts
-`seed-person-` and every encounter id `seed-encounter-`:
-
-```sh
-glasses search-seed            # 26 utterances, 22 facts, 4 encounters
-glasses search-check           # capture and seed counted separately
-glasses search-seed --clear    # removes every source=seed document, and
-                               # cannot touch a real capture
-```
-
-Real recordings go in the same indices as `source: "capture"`:
-
-```sh
-glasses search-index conversation.wav --location "Cal Hacks"
-```
-
-Facts are extracted from real audio by `glasses remember` and
-`glasses meet --remember`, which transcribe, extract with Gemini, and index
-both halves. Segments alone already answer "what did Dan say he'd send
-me?"; facts make the answer short enough to read on a glance.
-
-### Runbook: pointing it at an Elastic Serverless project
-
-Agent Builder is GA on Serverless and in 9.3 (preview in 9.2). **This path
-has not been run against a live project** — everything in `glasses.search`
-is tested against a fake HTTP transport, and the API shapes come from the
-Elastic docs. Expect to debug the first run.
-
-1. Create an **Elasticsearch Serverless** project at
-   [cloud.elastic.co](https://cloud.elastic.co).
-2. From the project's connection details, copy the **Elasticsearch
-   endpoint** (`https://….es.….elastic.cloud`) and create an **API key**.
-3. Export both. Agent Builder is a *Kibana* API, so the commands also need
-   the Kibana endpoint; it is derived by swapping `.es.` for `.kb.`, which
-   is right on Elastic Cloud. Set it yourself if that is wrong for your
-   deployment:
-
-   ```sh
-   export ELASTIC_URL='https://my-project.es.us-east-1.aws.elastic.cloud'
-   export ELASTIC_API_KEY='…'
-   export ELASTIC_KIBANA_URL='https://my-project.kb.us-east-1.aws.elastic.cloud'
-   ```
-
-4. `glasses search-check` — prints both endpoints, the key redacted, the
-   Elasticsearch version, what is in each index, and whether the agent
-   exists. Fix anything it reports before going on.
-5. `glasses search-setup` then `glasses agent-setup` then
-   `glasses search-seed`.
-6. `glasses ask "who did I meet at Cal Hacks"`.
-
-Optional: `glasses search-setup --semantic` adds a `semantic_text` field
-and `glasses search-seed --semantic` populates it. It needs an inference
-endpoint in the project, so it is off by default — a demo that can fail on
-stage is not an improvement.
-
-Other variables: `ELASTIC_INDEX_PREFIX` (default `glasses`) and
-`ELASTIC_AGENT_ID` (default `glasses_recall`). No credential is ever read
-from a file in this repo.
-
-### Every command
-
-| command | what it does |
-|---|---|
-| `glasses check` | dependency versions, weights digests, what is in the store |
-| `glasses enroll --name N --consent "…" --camera` | capture 6 views from the webcam |
-| `glasses enroll --name N --consent "…" photos/` | same, from image files |
-| `glasses identify photos/` | run the pipeline over images and print verdicts |
-| `glasses watch` | live webcam, boxes and names |
-| `glasses people` | who is enrolled, and their consent record |
-| `glasses forget "Sam"` | delete a person and all their data, in one operation |
-| `glasses calibrate-pose frames/` | measure `nose_frontal_fraction` for your camera |
-| `glasses bench frames/` | per-stage latency against the budget |
-| `glasses voice-check` | fetch the voice models, report the wearer and the recogniser |
-| `glasses enroll-voice --name N --consent "…" --mic` | record a voice now (`--wearer` for yourself) |
-| `glasses enroll-voice --name N --consent "…" audio/` | same, from audio files |
-| `glasses identify-voice --mic` | listen now and say who it heard |
-| `glasses identify-voice audio/` | same, from files (`--diarize` for several voices) |
-| `glasses forget-voice "Sam"` | drop a bad voice enrollment, keep the face one |
-| `glasses voice-compare a.wav b.wav` | pairwise similarity between recordings |
-| `glasses transcribe audio/` | who said what, attributed, via Cartesia (`--mic` to listen now) |
-| `glasses meet --remember` | **the whole loop**: camera + mic, bind speech to a face, extract facts, index |
-| `glasses remember audio/` | transcribe, extract facts with Gemini, index both (`--dry-run` to look first) |
-| `glasses transcribe audio/ --local` | the same, on local Whisper — no key, no network |
-| `glasses voice-eval recordings/` | calibrate `accept_threshold` on your own voices |
-| `glasses ask "who did I meet at Cal Hacks"` | ask the Agent Builder agent about people you have met |
-| `glasses search-check` | what Elastic is configured, reachable, and holding |
-| `glasses search-setup` | create the two indices (`--recreate`, `--semantic`, `--dry-run`) |
-| `glasses agent-setup` | apply the Agent Builder tools and agent (`--dry-run`) |
-| `glasses search-seed` | load the synthetic demo encounters (`--clear` to remove) |
-| `glasses search-index audio/` | transcribe real recordings and index what was said |
-| `glasses db init` | apply `schema.sql` to Postgres (`--reset` to start over) |
-| `glasses db stats` | rows, compression, and the live per-minute view |
-
-`--store DIR` moves the gallery, `--help` works on any subcommand.
-
-The store is a directory (`glasses-store/` by default): an `.npz` of vectors
-beside a JSON index. Delete it to start over.
-
-### As a library
-
-```python
-from glasses.face import ArcFaceEmbedder, FacePipeline, InMemoryGallery, ScrfdDetector
-
-pipeline = FacePipeline(ScrfdDetector(), ArcFaceEmbedder(), InMemoryGallery())
-result = pipeline.process_frame(frame)  # one frame
-index, result = pipeline.best_frame(burst)  # pick the best of a burst
-```
-
-Tests need none of that — numpy alone:
-
-```sh
-uv pip install -e . --group dev && .venv/bin/python -m pytest
-```
+Older versions could index full transcripts in Elastic. This version does
+not write them. Existing Elastic indices are not changed automatically; if
+you used that earlier feature, delete those old indices separately when you
+no longer need them.
 
 ## Storage: TigerData, one database for both halves
 
@@ -530,10 +310,10 @@ two real-time continuous aggregates. Use `db stats` to verify the connection,
 row counts, and live per-minute view. The schema enables compression after
 7 days and raw observation retention of 90 days.
 
-Enrollment, recognition, voice, and recall indexing now use the TigerData
-gallery automatically when `DATABASE_URL` is set. A database connection
-failure stops the command; it never silently writes a local gallery.
-An explicit `--store path` selects a local gallery for offline work.
+Enrollment, recognition, and voice use the TigerData gallery automatically
+when `DATABASE_URL` is set. Structured memories for Gemini recall currently
+live in `glasses-store/encounters.json`; an explicit `--store path` selects a
+different local memory directory.
 
 To move an existing local gallery and captured files into TigerData:
 
@@ -553,8 +333,7 @@ Use `--local-store path` and `--media-dir path` for other source directories.
 person. Shared source archives are removed in full; other people's canonical
 database records stay intact.
 
-Elasticsearch remains a derived index; automatic syncing from TigerData is
-not implemented. `search-index` and `search-seed` still run manually.
+The former Elasticsearch transcript path is no longer part of the active CLI.
 
 ### Start a local database
 
@@ -642,10 +421,9 @@ templates sat in the table.
 
 ## What is built
 
-Server-side face recognition only — the six stages of the PRD's hot loop, plus
-the schema and the measurement harness they depend on — plus the voice
-pipeline, the encounter clock, fact extraction, the Elastic recall layer and
-the TigerData schema that followed it. ESP32-S3 firmware lives in
+Face recognition, voice attribution, the encounter clock, Gemini fact
+extraction and recall, the local structured memory store, and an optional
+TigerData gallery are built. ESP32-S3 firmware lives in
 `arduino_smart_glasses.ino/` alongside `vision_hub.py`.
 
 Still missing from the PRD: the dwell-and-speech trigger is written
@@ -699,7 +477,7 @@ src/glasses/
   store.py       file-backed people + templates, for M0
   cli.py         glasses check / enroll / identify / watch / bench
   voice_cli.py   the voice subcommands
-  search_cli.py  glasses ask, and the setup/seed/index commands
+  search_cli.py  Gemini-backed glasses ask and local person lookup
   db_cli.py      glasses db init / stats
 ```
 
@@ -814,24 +592,8 @@ will not notice without the chart.
   degradation of the current crop, which is what far-field audio needs.
 - `PgVectorGallery` and cloud migration are covered by the database integration
   tests, which require `DATABASE_URL` and run in an isolated schema.
-- The Elastic path is verified against a live Elasticsearch 9.6 serverless
-  project: indices created, six tools and the agent applied, and the agent
-  answering questions from them. One shape was wrong until it was run —
-  ES|QL tool params are typed `string`, not the `keyword` of Elastic's own
-  spec examples. What remains unverified is every request shape
-  `glasses.search` does not send, whose definitions still come from Elastic's
-  docs rather than from a response. The specific things to expect to
-  debug are the Kibana-vs-Elasticsearch base URL, whether `PUT
-  /api/agent_builder/tools/{id}` accepts each definition as written, and
-  whether `TO_LOWER(value.keyword) LIKE ?value` is accepted in an ES|QL
-  tool.
-- Facts are extracted from real transcripts by `glasses.facts` (Gemini,
-  structured output, verified live). `search-seed` still exists for demo
-  data and tags everything `source: seed`, which the agent will tell you
-  about when asked.
-- Elastic holds a copy, and the sync is manual. There is no trigger that
-  indexes an encounter when it closes; `search-index` and `search-seed`
-  are run by hand.
+- Gemini extraction uses structured output. The selected facts are written
+  locally; older Elastic indices are not read or updated by this flow.
 - The retention and compression *policies* exist and are scheduled; neither
   has been observed firing, because nothing here is seven days old. The
   manual `compress_chunk` path is tested, which proves the configuration is
@@ -850,8 +612,9 @@ PRD puts the consent and deletion paths in M0 rather than retrofitting them.
 The deletion job that enforces retention is not written yet. Until it is, do
 not capture anyone.
 
-One thing leaves the machine, and it is worth knowing which: with
-`CARTESIA_API_KEY` set, each speech segment that passed the quality gate is
-uploaded to Cartesia for transcription. Nothing else is — not frames, not
-embeddings, not the gallery. `glasses transcribe --local`, or no key, keeps
-even that offline.
+The `meet` and `remember` paths send temporary speech segments and their
+attributed text to Gemini for transcription and fact extraction. Later
+questions send only saved structured memories to Gemini. The separate
+`glasses transcribe` command can send speech to Cartesia when its key is set;
+`--local` keeps that command's transcription local. Frames, face embeddings,
+and the gallery remain local.

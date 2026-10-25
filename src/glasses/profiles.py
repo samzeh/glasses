@@ -1,15 +1,14 @@
-"""Small, local encounter summaries for immediate face-triggered recall.
+"""Structured person memories for local recall and the OLED.
 
-The search index keeps the full transcript and facts. This file keeps the
-four short fields the glasses need when a face is recognised, keyed by the
-gallery's person ID rather than by a name that may collide.
+Only selected facts are written. Transcripts and audio stay in memory during
+extraction and are not part of this store.
 """
 
 from __future__ import annotations
 
 import json
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -23,10 +22,12 @@ class Profile:
     location: str | None
     fun_fact: str | None
     encounter_id: str
+    facts: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
 
 def profile_path(store: Any) -> Path:
-    return Path(getattr(store, "path", "glasses-store")) / "encounters.json"
+    root = store if isinstance(store, (Path, str)) else getattr(store, "path", "glasses-store")
+    return Path(root) / "encounters.json"
 
 
 def load_profiles(path: Path) -> dict[str, Profile]:
@@ -59,11 +60,39 @@ def save_encounter(
     }
     for person_id, name in participants.items():
         old = profiles.get(person_id)
+        grouped = {kind: list(items) for kind, items in old.facts.items()} if old else {}
+        for fact in facts:
+            if fact.person_id != person_id or not fact.value.strip():
+                continue
+            entry = {
+                "topic": fact.topic,
+                "value": fact.value.strip(),
+                "confidence": fact.confidence,
+                "observed_at": occurred_at,
+                "encounter_id": encounter_id,
+            }
+            bucket = grouped.setdefault(fact.kind, [])
+            key = (str(fact.topic or "").casefold(), fact.value.strip().casefold())
+            existing = next(
+                (
+                    index
+                    for index, item in enumerate(bucket)
+                    if (str(item.get("topic") or "").casefold(), item["value"].casefold()) == key
+                ),
+                None,
+            )
+            if existing is None:
+                bucket.append(entry)
+            else:
+                entry["confidence"] = max(bucket[existing]["confidence"], fact.confidence)
+                bucket[existing] = entry
         candidates = [
-            f"{fact.kind.capitalize()}: {fact.value.strip()}"
+            f"{fact.topic.capitalize() if fact.topic else fact.kind.capitalize()}: "
+            f"{fact.value.strip()}"
             for fact in facts
             if fact.person_id == person_id
-            and fact.kind in {"interest", "role", "employer", "project", "industry"}
+            and fact.kind
+            in {"hobby", "favorite", "interest", "project", "role", "occupation", "employer"}
             and fact.value.strip()
         ]
         # Keep the chosen fact stable when the same recording is retried.
@@ -80,6 +109,7 @@ def save_encounter(
             location=location if first else old.location,
             fun_fact=fun_fact,
             encounter_id=encounter_id,
+            facts=grouped,
         )
     if participants:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,6 +120,18 @@ def save_encounter(
         )
         temporary.replace(path)
     return profiles
+
+
+def find_profiles(path: Path, query: str) -> list[Profile]:
+    """Look up people by exact ID or a case-insensitive name fragment."""
+    needle = query.strip().casefold()
+    if not needle:
+        return []
+    return [
+        profile
+        for profile in load_profiles(path).values()
+        if profile.person_id.casefold() == needle or needle in profile.name.casefold()
+    ]
 
 
 def display_fields(profile: Profile) -> tuple[str, str, str, str]:

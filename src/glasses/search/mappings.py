@@ -84,6 +84,7 @@ def fact_mappings(*, semantic: bool = False) -> dict[str, Any]:
     properties: dict[str, Any] = {
         "doc_type": {"type": "keyword"},
         "kind": {"type": "keyword"},
+        "topic": {"type": "keyword"},
         "value": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
         "person_id": {"type": "keyword"},
         "person_name": _person_name(),

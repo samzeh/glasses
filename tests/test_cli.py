@@ -97,8 +97,15 @@ def test_every_subcommand_parses():
         ("transcribe", "--language", "es", "a.wav"),
         ("voice-compare", "a.wav", "b.wav"),
         ("voice-eval", "recordings/"),
+        ("ask", "what is Dan planning?"),
+        ("person", "Dan", "--kind", "plan"),
     ):
         assert parse(*argv).command == argv[0]
+
+
+def test_transcript_indexing_is_not_exposed():
+    with pytest.raises(SystemExit):
+        parse("search-index", "conversation.wav")
 
 
 def test_enroll_requires_a_consent_note():

@@ -1,18 +1,14 @@
 """Transcript to facts, with Gemini.
 
 The cold loop's last step. Transcription says who spoke and what they
-said; this says what any of it meant, as rows that outlive the recording:
-employer, role, commitment, interest. A transcript is a wall of text
-nobody rereads. A fact is something the glasses can hand back the next
-time they see the face.
+said; Gemini selects short, useful facts that outlive the recording. The
+transcript stays in memory and is discarded after extraction.
 
 Three rules shape the prompt and the schema, and all three come from the
 PRD:
 
-* **Every fact carries the sentence it came from.** ``evidence_span`` is
-  not decoration. A profile that asserts something wrong is only
-  correctable if you can see what caused it, and a fact with no evidence
-  is one you cannot argue with.
+* **Every fact carries a short supporting phrase.** ``evidence_span``
+  helps correct mistakes without saving the conversation itself.
 * **A fact belongs to the speaker it is about, or to nobody.** Facts are
   attached by speaker name and resolved back to ``person_id`` here, in
   code, not by the model. Where the subject is ambiguous, ``person_id``
@@ -45,8 +41,8 @@ from .voice.transcribe import Utterance
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
-DEFAULT_MODEL = "gemini-3.5-flash"
-FALLBACK_MODELS = ("gemini-3.7-flash", "gemini-3.8-flash", "gemini-flash-latest")
+DEFAULT_MODEL = "gemini-3.8-flash"
+FALLBACK_MODELS = ("gemini-3.6-flash", "gemini-3.5-flash")
 
 KEY_HINT = (
     "Set GEMINI_API_KEY (a .env beside the repo is read at startup). "
@@ -58,12 +54,20 @@ KEY_HINT = (
 #: split one person's history across three labels nothing joins back up.
 FACT_KINDS = (
     "name",
+    "age",
+    "school",
     "employer",
     "role",
+    "occupation",
     "industry",
     "project",
     "commitment",
     "interest",
+    "hobby",
+    "family",
+    "plan",
+    "favorite",
+    "goal",
     "location",
     "relationship",
 )
@@ -113,17 +117,21 @@ RESPONSE_SCHEMA: dict[str, Any] = {
                         "description": "Speaker name the fact is about, exactly as labelled.",
                     },
                     "kind": {"type": "string", "enum": list(FACT_KINDS)},
+                    "topic": {
+                        "type": "string",
+                        "description": "Subtype, e.g. movie or sister; empty if none.",
+                    },
                     "value": {
                         "type": "string",
-                        "description": "The fact itself, as a short phrase.",
+                        "description": "A concise fact phrase, never a transcript sentence.",
                     },
                     "evidence": {
                         "type": "string",
-                        "description": "The verbatim sentence from the transcript.",
+                        "description": "A short verbatim supporting phrase from the transcript.",
                     },
                     "confidence": {"type": "number"},
                 },
-                "required": ["subject", "kind", "value", "evidence", "confidence"],
+                "required": ["subject", "kind", "topic", "value", "evidence", "confidence"],
             },
         }
     },
@@ -132,19 +140,29 @@ RESPONSE_SCHEMA: dict[str, Any] = {
 
 PROMPT = """\
 You are reading a transcript of a conversation recorded by smart glasses \
-worn by {wearer}. Extract durable facts about the people {wearer} spoke \
-with, so the glasses can recall them at the next meeting.
+worn by {wearer}. Extract only useful facts about the people {wearer} spoke \
+with for future conversations. The transcript will not be stored.
 
 Rules:
 - Only facts stated or clearly implied in the transcript. Never infer from \
 general knowledge, and never invent a detail that would be useful if true.
-- `evidence` must be a verbatim sentence copied from the transcript.
+- Keep `value` as a short phrase under 160 characters, not a transcript \
+sentence or a summary of the whole conversation.
+- `evidence` must be a short verbatim supporting phrase under 120 characters.
+- Categorize useful details: name, age, school, work, occupation, hobbies, \
+family members, future plans, favorites, current projects, and future goals.
+- Use `topic` for a subtype such as favorite movie, sister, or next summer. \
+Use an empty string when no subtype helps.
+- Specific plans and goals are especially useful for future follow-up \
+questions. Keep them even if they are not permanent facts.
 - `subject` must be one of these exact speaker names: {names}.
 - Attribute a fact to the person it is ABOUT, not whoever said it. If \
 {wearer} says "you work at Acme", the fact belongs to the other person.
 - Skip facts about {wearer} themselves; the glasses already know the wearer.
 - Skip small talk, pleasantries and anything true only during this \
 conversation ("is sitting down", "is getting coffee").
+- Do not duplicate the same detail under several kinds. Select only the \
+details worth bringing up again.
 - `confidence` is 0 to 1. Be strict: a garbled or half-heard line is low \
 confidence. Returning three solid facts beats returning ten shaky ones.
 - If nothing durable was said, return an empty list.
@@ -384,9 +402,10 @@ class GeminiExtractor:
             return None
 
         kind = str(item.get("kind") or "").strip()
+        topic = str(item.get("topic") or "").strip()
         value = str(item.get("value") or "").strip()
         subject = str(item.get("subject") or "").strip()
-        if kind not in FACT_KINDS or not value or not subject:
+        if kind not in FACT_KINDS or not value or not subject or len(value) > 160:
             return None
 
         # A fact about the wearer is one the glasses already have, and
@@ -407,11 +426,12 @@ class GeminiExtractor:
         if subject not in identities:
             person_name = None
 
-        evidence = str(item.get("evidence") or "").strip() or None
+        evidence = str(item.get("evidence") or "").strip()[:120] or None
         start_ms, end_ms = _evidence_window(utterances, evidence or "")
         return PersonFact(
             encounter_id=encounter_id,
             kind=kind,
+            topic=topic[:60] or None,
             value=value,
             person_id=person_id,
             person_name=person_name or (subject if subject in identities else None),

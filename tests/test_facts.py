@@ -35,8 +35,14 @@ CONVERSATION = [
         person_id="p1",
         person_name="Dan Kim",
     ),
-    utterance("I'll send you the preprint on Monday.", 4.0, 6.0, speaker=1, person_id="p1",
-              person_name="Dan Kim"),
+    utterance(
+        "I'll send you the preprint on Monday.",
+        4.0,
+        6.0,
+        speaker=1,
+        person_id="p1",
+        person_name="Dan Kim",
+    ),
 ]
 
 
@@ -102,9 +108,7 @@ def test_the_request_pins_the_schema_and_zero_temperature():
 
 def test_the_prompt_names_the_speakers_and_the_wearer():
     captured = []
-    extractor([GOOD], captured=captured).extract(
-        CONVERSATION, encounter_id="e1", wearer_name="Sam"
-    )
+    extractor([GOOD], captured=captured).extract(CONVERSATION, encounter_id="e1", wearer_name="Sam")
     prompt = captured[0][2]["contents"][0]["parts"][0]["text"]
     assert "'Dan Kim'" in prompt
     assert "Sam" in prompt
@@ -135,6 +139,23 @@ def test_the_evidence_span_is_kept():
     """A fact with no evidence is one you cannot argue with."""
     [fact] = extractor([GOOD]).extract(CONVERSATION, encounter_id="e1")
     assert fact.evidence_span == GOOD["evidence"]
+
+
+def test_gemini_can_extract_a_typed_future_plan_and_favorite():
+    items = [
+        dict(GOOD, kind="plan", topic="next summer", value="visit Japan"),
+        dict(GOOD, kind="favorite", topic="movie", value="Spirited Away"),
+    ]
+    facts = extractor(items).extract(CONVERSATION, encounter_id="e1")
+    assert [(fact.kind, fact.topic, fact.value) for fact in facts] == [
+        ("plan", "next summer", "visit Japan"),
+        ("favorite", "movie", "Spirited Away"),
+    ]
+
+
+def test_a_whole_transcript_cannot_be_saved_as_one_fact():
+    item = dict(GOOD, value="conversation " * 20)
+    assert extractor([item]).extract(CONVERSATION, encounter_id="e1") == []
 
 
 def test_the_evidence_is_located_in_the_recording():
@@ -195,9 +216,7 @@ def test_an_invented_speaker_keeps_the_fact_but_not_the_identity():
 
 
 def test_a_non_numeric_confidence_is_dropped():
-    assert extractor([dict(GOOD, confidence="high")]).extract(
-        CONVERSATION, encounter_id="e1"
-    ) == []
+    assert extractor([dict(GOOD, confidence="high")]).extract(CONVERSATION, encounter_id="e1") == []
 
 
 def test_confidence_is_clamped():

@@ -134,6 +134,7 @@ class PersonFact:
     encounter_id: str
     kind: str
     value: str
+    topic: str | None = None
     person_id: str | None = None
     person_name: str | None = None
     evidence_span: str | None = None
@@ -145,13 +146,14 @@ class PersonFact:
 
     @property
     def doc_id(self) -> str:
-        return _digest(self.encounter_id, self.person_id, self.kind, self.value)
+        return _digest(self.encounter_id, self.person_id, self.kind, self.topic, self.value)
 
     def to_doc(self, *, semantic: bool = False) -> dict[str, Any]:
         doc = _clean(
             {
                 "doc_type": FACT_TYPE,
                 "kind": self.kind,
+                "topic": self.topic,
                 "value": self.value,
                 "person_id": self.person_id,
                 "person_name": self.person_name,
@@ -173,6 +175,7 @@ class PersonFact:
         return cls(
             encounter_id=str(row["encounter_id"]),
             kind=str(row["kind"]),
+            topic=_optional_str(row.get("topic")),
             value=str(row["value"]),
             person_id=_optional_str(row.get("person_id")),
             person_name=_optional_str(row.get("person_name") or row.get("display_name")),
