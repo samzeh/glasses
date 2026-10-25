@@ -1,17 +1,18 @@
-// Zero-dependency server for the voice-notes demo.
-// Holds the Gemini API key, proxies two calls, serves the static front end.
-//   POST /api/summarize  { mimeType, audio: <base64> } -> { summary, transcript }
+// Holds the Gemini API key, saves each note in TigerData, and serves the front end.
+//   POST /api/summarize  { mimeType, audio: <base64>, durationMs } -> { summary, transcript, encounterId }
 //   POST /api/speak      { text }                      -> { audio: <base64 wav> }
-// Run: GEMINI_API_KEY=... node server.js     (or: node --env-file=.env server.js)
+// Run: npm run db:init, then npm run dev (both keys in .env).
 
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { checkDatabase, pool, saveVoiceNote } from './db.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8787);
 const KEY = process.env.GEMINI_API_KEY ?? '';
+const KEEP_AUDIO = process.env.VOICE_NOTES_STORE_AUDIO !== 'false';
 
 const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 // Overridable so a model rename does not require a code edit.
@@ -138,22 +139,37 @@ function sendJson(res, status, obj) {
 }
 
 async function handleSummarize(req, res) {
-  const { audio, mimeType } = await readJsonBody(req);
-  if (typeof audio !== 'string' || audio.length < 100) {
+  const { audio, mimeType, durationMs } = await readJsonBody(req);
+  if (typeof audio !== 'string' || audio.length < 100 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(audio)) {
     return sendJson(res, 400, { error: 'No audio received.' });
   }
+  const recording = Buffer.from(audio, 'base64');
+  const recordingDuration = Number.isInteger(durationMs) && durationMs >= 0 && durationMs <= 300_000
+    ? durationMs : null;
+  const normalizedMime = normalizeMime(mimeType);
   const payload = await callGemini({
     model: TEXT_MODEL,
     input: [
       { type: 'text', text: PROMPT },
-      { type: 'audio', data: audio, mime_type: normalizeMime(mimeType) },
+      { type: 'audio', data: audio, mime_type: normalizedMime },
     ],
   });
   const text = collectText(payload);
   if (!text) return sendJson(res, 502, { error: 'The model returned an empty response.' });
   const { summary, transcript } = parseSummary(text);
+  let encounterId;
+  try {
+    encounterId = await saveVoiceNote({
+      transcript, summary, audio: recording, mimeType: normalizedMime,
+      durationMs: recordingDuration, model: TEXT_MODEL, keepAudio: KEEP_AUDIO,
+    });
+  } catch (error) {
+    console.error('[database] could not save note:', error.message);
+    return sendJson(res, 503, { error: 'Could not save this note to TigerData. Please retry.' });
+  }
   console.log(`[summarize] ok, ${summary.length} chars of summary`);
-  sendJson(res, 200, { summary, transcript });
+  sendJson(res, 200, { summary, transcript, encounterId });
 }
 
 async function handleSpeak(req, res) {
@@ -178,7 +194,12 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') {
-      return sendJson(res, 200, { ok: true, keyConfigured: Boolean(KEY) });
+      try {
+        await checkDatabase();
+        return sendJson(res, 200, { ok: true, keyConfigured: Boolean(KEY), databaseReady: true });
+      } catch {
+        return sendJson(res, 503, { ok: false, keyConfigured: Boolean(KEY), databaseReady: false });
+      }
     }
     if (req.method === 'POST' && (url.pathname === '/api/summarize' || url.pathname === '/api/speak')) {
       if (!KEY) return sendJson(res, 500, { error: 'GEMINI_API_KEY is not set on the server.' });
@@ -199,8 +220,17 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`\n  Voice notes demo running at http://localhost:${PORT}`);
-  if (!KEY) console.log('  WARNING: GEMINI_API_KEY is not set. Requests will fail until you set it.');
-  console.log('');
-});
+try {
+  await checkDatabase();
+  server.listen(PORT, () => {
+    console.log(`\n  Voice notes demo running at http://localhost:${PORT}`);
+    if (!KEY) console.log('  WARNING: GEMINI_API_KEY is not set. Requests will fail until you set it.');
+    console.log('  Saving notes in TigerData.');
+    console.log('');
+  });
+} catch (error) {
+  console.error('TigerData is unavailable or voice_note is missing. Run npm run db:init.');
+  console.error(error.message);
+  await pool.end();
+  process.exitCode = 1;
+}

@@ -369,7 +369,7 @@
       const res = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ audio: base64, mimeType: chosenMime }),
+        body: JSON.stringify({ audio: base64, mimeType: chosenMime, durationMs: Math.round(seconds * 1000) }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || ('Request failed with status ' + res.status));
@@ -383,7 +383,7 @@
       } else {
         ui.transcriptWrap.classList.add('hidden');
       }
-      setState('idle', 'Done. Play the summary or record another.');
+      setState('idle', 'Saved to TigerData. Play the summary or record another.');
       ui.timer.textContent = fmt(seconds);
       speak(summaryText, { auto: true });
     } catch (err) {
@@ -477,7 +477,10 @@
 
   fetch('/api/health')
     .then((r) => r.json())
-    .then((d) => { if (!d.keyConfigured) setBanner('The server has no GEMINI_API_KEY set. Add it to .env and restart.'); })
+    .then((d) => {
+      if (!d.databaseReady) setBanner('TigerData is unavailable. Check the server and database connection.');
+      else if (!d.keyConfigured) setBanner('The server has no GEMINI_API_KEY set. Add it to .env and restart.');
+    })
     .catch(() => {});
 
   setState('idle');

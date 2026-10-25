@@ -191,6 +191,10 @@ That is not a calibration. `voice-eval` does it properly on your voices.
 
 ## Recall: ask about the people you have met
 
+The separate [Voice Notes web app](voice-notes/README.md) saves its recordings,
+transcripts, and summaries in TigerData. It does not currently index those notes
+in Elastic, so `glasses ask` does not search them.
+
 Recognition answers *who is in front of me*. Recall answers the other
 question — *who have I met who works in biotech?* — and it is a search
 problem, not a recognition one. The transcripts already exist, attributed
@@ -284,20 +288,22 @@ The tool calls are printed on purpose. An answer that names the queries
 behind it is one the audience can check, and it is the first thing to read
 when the answer is wrong.
 
-### Elastic is a derived index, not the system of record
+### Elastic's role today
 
 ```
-Postgres/TigerData          Elastic                Agent Builder
-(the truth)          →   (a searchable copy)  →   (6 tools + 1 agent)
-  people, encounters       transcript_segment       glasses ask "…"
-  facts, templates         person_fact
+TigerData                 Elastic                   Agent Builder
+people, face/voice   |    transcript segments  →    glasses ask "…"
+templates, Voice Notes   person facts
 ```
 
-One-way sync, always. Nothing reads an answer out of Elastic and stores it
-as truth, and the index can be dropped and rebuilt from the source at any
-time — which is what makes it safe to put an LLM in front of. An agent
-querying a derived copy can be wrong about what it found; an agent
-querying the system of record can be wrong about what *is*.
+The intended architecture treats Elastic as a searchable copy of TigerData.
+The current CLI does not complete that sync: `glasses meet --remember` and
+`glasses remember` write transcript segments and extracted facts directly to
+Elastic, without saving those records in TigerData. Do not delete the Elastic
+indices expecting to rebuild them from TigerData. Voice Notes takes the other
+path: it saves recordings, transcripts, and summaries in TigerData but does not
+index them in Elastic. `glasses ask` therefore searches only the CLI's indexed
+conversations, not Voice Notes.
 
 Two document types, both with deterministic ids so that re-running the
 sync overwrites rather than duplicates:
