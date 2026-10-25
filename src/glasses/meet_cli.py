@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from pathlib import Path
 
 from .autoenroll import MIN_NAME_CONFIDENCE
 from .binding.asd import AsdConfig
+from .device import TouchEvent
 from .encounter.clock import Clock, seconds_to_us, us_to_seconds
 from .face import FacePipeline
 from .face.models import default_providers
@@ -65,18 +67,36 @@ def cmd_meet(args: argparse.Namespace) -> int:
     camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    print(f"\nrecording {args.seconds}s — talk, and let the other person talk. q to stop.\n")
+    stop_hint = "ESP long tap" if args.audio_source == "esp" else "q"
+    if args.audio_source == "esp" and not args.headless:
+        stop_hint += " or q"
+    elif args.audio_source == "laptop" and args.headless:
+        stop_hint = "Ctrl-C"
+    print(
+        f"\nrecording {args.seconds}s — talk, and let the other person talk. "
+        f"{stop_hint} to stop.\n"
+    )
 
     detections: list = []
     frames_seen = 0
+    stop_capture = threading.Event()
+
+    def on_touch(event: TouchEvent) -> None:
+        if event.gesture == "long":
+            stop_capture.set()
+
     try:
         with AudioRecorder(
-            clock, device=args.device, source=args.audio_source, esp_port=args.esp_port
+            clock,
+            device=args.device,
+            source=args.audio_source,
+            esp_port=args.esp_port,
+            on_touch=on_touch if args.audio_source == "esp" else None,
         ) as recorder:
             started = clock.now_us()
             deadline = started + seconds_to_us(args.seconds)
 
-            while clock.now_us() < deadline:
+            while clock.now_us() < deadline and not stop_capture.is_set():
                 ok, frame = camera.read()
                 if not ok:
                     break
@@ -115,6 +135,9 @@ def cmd_meet(args: argparse.Namespace) -> int:
         camera.release()
         if not args.headless:
             cv2.destroyAllWindows()
+
+    if stop_capture.is_set():
+        print("stopped by ESP long tap")
 
     elapsed = us_to_seconds(clock.now_us() - started)
     fps = frames_seen / elapsed if elapsed else 0.0

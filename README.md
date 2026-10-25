@@ -81,7 +81,29 @@ Live webcam with a box round each face and a name above it:
 | amber | saw a face, but the frame failed the quality gate |
 | grey | no face found |
 
-The latency counter is top-left. `q` quits and prints p50/p95.
+The latency counter is top-left. When a face is labelled "possibly X", press
+`a` to confirm or `r` to dismiss that suggestion. The choice changes the
+on-screen label for the current face while it remains in view; it does not
+enroll anyone or change the gallery. `q` quits and prints p50/p95. These laptop
+keys are the default controls. With `--headless`, type a key followed by Return
+in the terminal; Ctrl-C also stops the command.
+
+For the ESP touch sensor, select the serial port explicitly (install the
+`device` extra first):
+
+```sh
+glasses watch --input-source esp --esp-port /dev/tty.usbmodem1234
+```
+
+The ESP sends `single` to accept, `double` to dismiss, and `long` to stop
+`watch`. In ESP mode, laptop keys do not make decisions. `watch` reads touch
+events on the shared audio/touch serial protocol described below; this
+face-only command ignores audio frames. Firmware must handle any device sleep
+or power circuitry after a long tap. Flash the updated
+`arduino_smart_glasses.ino/test_arduino.ino` sketch: it reads touch pin 4 and
+emits the JSON gestures at 921600 baud. It also sends the older `CAM_ON`,
+`CAM_OFF`, and `SNAPSHOT` lines for `vision_hub.py`; the new Python reader
+ignores those lines. Only one process can open the serial port at a time.
 
 Or over still images:
 
@@ -133,11 +155,15 @@ The ESP sends newline-terminated JSON at 921600 baud. Each message has
 `pcm16` is base64 of little-endian signed 16-bit mono PCM. Keep audio chunks
 near 100 ms. A touch message on the same serial link uses
 `{"v":1,"type":"touch","t_us":123,"gesture":"single"}` with `single`,
-`double`, or `long` as the gesture. The firmware needs to implement this
-protocol; no ESP sensor or pin mapping is assumed here. If ESP input is
-selected and unavailable, capture fails rather than silently using the laptop.
+`double`, or `long` as the gesture. The sketch in this repo implements touch
+messages but does not yet send microphone audio; ESP audio capture still needs
+microphone firmware. If ESP input is selected and unavailable, capture fails
+rather than silently using the laptop.
 For `meet`, the first arriving audio chunk anchors the ESP clock to the host
 clock, so its face/audio alignment should be calibrated on the actual device.
+An ESP long tap stops `meet` capture and lets it process the audio collected so
+far; single and double taps do not affect `meet` because it has no pending
+suggestion. Firmware handles device sleep or power control.
 
 The second identity channel, plus transcription on top of it. Speech-to-text
 alone cannot do this: an STT API transcribes sound, it does not track people

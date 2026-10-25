@@ -25,6 +25,15 @@ from .meet_cli import register as register_meet
 from .search_cli import register as register_search
 from .storage import open_store, store_label
 from .store import LocalStore
+from .touch import (
+    Action,
+    EspTouchSource,
+    ReviewState,
+    Suggestion,
+    SuggestionReview,
+    TerminalKeyboardSource,
+    WindowKeyboardSource,
+)
 from .voice_cli import register as register_voice
 
 DEFAULT_STORE = Path("glasses-store")
@@ -323,6 +332,13 @@ def cmd_identify(args: argparse.Namespace) -> int:
 
 def cmd_watch(args: argparse.Namespace) -> int:
     """Live from a webcam. The closest thing to wearing the device."""
+    if args.input_source == "esp" and not args.esp_port:
+        print("ESP touch input needs --esp-port.", file=sys.stderr)
+        return 1
+    if args.input_source == "laptop" and args.esp_port:
+        print("--esp-port requires --input-source esp.", file=sys.stderr)
+        return 1
+
     cv2 = _require_cv2()
     store = open_store(args.store)
     pipeline = build_pipeline(store)
@@ -337,9 +353,19 @@ def cmd_watch(args: argparse.Namespace) -> int:
         )
         return 1
 
-    print("watching — q or ctrl-c to stop")
+    if args.input_source == "esp":
+        print("watching — ESP single accepts, double rejects, long stops; Ctrl-C also stops")
+        esp_actions = EspTouchSource(args.esp_port)
+        actions = esp_actions
+    else:
+        print("watching — a accepts, r rejects, q stops; headless keys need Return")
+        esp_actions = None
+        actions = TerminalKeyboardSource() if args.headless else WindowKeyboardSource(cv2)
     latencies: list[float] = []
+    review = SuggestionReview()
     try:
+        if esp_actions is not None:
+            esp_actions.start()
         while True:
             ok, frame = capture.read()
             if not ok:
@@ -347,6 +373,24 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
             result = pipeline.process_frame(frame)
             latencies.append(result.timings.total_ms)
+
+            primary = result.primary
+            match = primary.match if primary is not None else None
+            suggestion = None
+            if match is not None and match.status is MatchStatus.LOW_CONFIDENCE and match.person_id:
+                suggestion = Suggestion(
+                    person_id=match.person_id,
+                    name=store.name_of(match.person_id) or match.person_id,
+                    similarity=match.similarity,
+                    bounds=(
+                        primary.detection.bbox.x1,
+                        primary.detection.bbox.y1,
+                        primary.detection.bbox.x2,
+                        primary.detection.bbox.y2,
+                    ),
+                )
+            if review.observe(suggestion):
+                print(f"suggestion: possibly {suggestion.name} ({suggestion.similarity:.3f})")
 
             for face in result.faces:
                 box = face.detection.bbox
@@ -380,15 +424,37 @@ def cmd_watch(args: argparse.Namespace) -> int:
                 (255, 255, 255),
                 2,
             )
+            if review.label:
+                cv2.putText(
+                    frame,
+                    review.label,
+                    (10, 52),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 200, 200),
+                    2,
+                )
             if not args.headless:
                 cv2.imshow("glasses", frame)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                if esp_actions is not None:
+                    cv2.waitKey(1)  # Keep the preview responsive; ignore laptop keys in ESP mode.
             elif len(latencies) % 30 == 0:
                 print(f"  {describe_face(result, store)}")
+
+            action = actions.poll()
+            if action is Action.SHUTDOWN:
+                break
+            decision = review.apply(action) if action is not None else None
+            if decision in (ReviewState.ACCEPTED, ReviewState.REJECTED):
+                print(review.label)
     except KeyboardInterrupt:
         pass
+    except (ConnectionError, ModuleNotFoundError, OSError) as error:
+        print(f"touch input failed: {error}", file=sys.stderr)
+        return 1
     finally:
+        if esp_actions is not None:
+            esp_actions.close()
         capture.release()
         if not args.headless:
             cv2.destroyAllWindows()
@@ -557,6 +623,10 @@ def build_parser() -> argparse.ArgumentParser:
     watch = subparsers.add_parser("watch", help="live from a webcam")
     watch.add_argument("--camera", type=int, default=0)
     watch.add_argument("--headless", action="store_true", help="no window, print instead")
+    watch.add_argument(
+        "--input-source", choices=("laptop", "esp"), default="laptop", help="touch controls"
+    )
+    watch.add_argument("--esp-port", help="ESP serial port, required with --input-source esp")
     watch.set_defaults(func=cmd_watch)
 
     people = subparsers.add_parser("people", help="list who is enrolled")

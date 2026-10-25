@@ -51,6 +51,20 @@ def test_serial_reader_keeps_a_partial_message_across_timeouts():
         assert device.read() == TouchEvent("long", 100)
 
 
+def test_serial_reader_handles_touch_next_to_legacy_hub_commands():
+    stream = io.BytesIO(
+        wire(type="touch", gesture="single")
+        + b"SNAPSHOT\n"
+        + wire(type="touch", gesture="long")
+        + b"CAM_OFF\n"
+    )
+    with EspSerialStream("", stream=stream) as device:
+        assert device.read() == TouchEvent("single", 100)
+        assert device.read() is None
+        assert device.read() == TouchEvent("long", 100)
+        assert device.read() is None
+
+
 @pytest.mark.parametrize(
     "message",
     [
