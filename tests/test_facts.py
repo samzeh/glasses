@@ -33,7 +33,7 @@ CONVERSATION = [
         4.0,
         speaker=1,
         person_id="p1",
-        person_name="Dan Kim",
+        person_name="Test Person",
     ),
     utterance(
         "I'll send you the preprint on Monday.",
@@ -41,7 +41,7 @@ CONVERSATION = [
         6.0,
         speaker=1,
         person_id="p1",
-        person_name="Dan Kim",
+        person_name="Test Person",
     ),
 ]
 
@@ -62,7 +62,7 @@ def extractor(facts, *, captured=None, **kwargs):
 
 
 GOOD = {
-    "subject": "Dan Kim",
+    "subject": "Test Person",
     "kind": "employer",
     "value": "Helix Bio",
     "evidence": "I work at Helix Bio, we do protein design.",
@@ -76,7 +76,7 @@ GOOD = {
 def test_the_transcript_is_speaker_labelled():
     rendered = F.render_transcript(CONVERSATION)
     assert "[Sam] Good to meet you." in rendered
-    assert "[Dan Kim] I work at Helix Bio, we do protein design." in rendered
+    assert "[Test Person] I work at Helix Bio, we do protein design." in rendered
 
 
 def test_a_speaker_with_no_identity_still_gets_a_label():
@@ -90,7 +90,7 @@ def test_blank_utterances_are_left_out():
 
 
 def test_speaker_names_are_in_first_appearance_order():
-    assert F.speaker_names(CONVERSATION) == ["Sam", "Dan Kim"]
+    assert F.speaker_names(CONVERSATION) == ["Sam", "Test Person"]
 
 
 def test_the_request_pins_the_schema_and_zero_temperature():
@@ -110,7 +110,7 @@ def test_the_prompt_names_the_speakers_and_the_wearer():
     captured = []
     extractor([GOOD], captured=captured).extract(CONVERSATION, encounter_id="e1", wearer_name="Sam")
     prompt = captured[0][2]["contents"][0]["parts"][0]["text"]
-    assert "'Dan Kim'" in prompt
+    assert "'Test Person'" in prompt
     assert "Sam" in prompt
 
 
@@ -131,7 +131,7 @@ def test_a_fact_is_mapped_back_to_the_person_who_said_it():
     [fact] = extractor([GOOD]).extract(CONVERSATION, encounter_id="e1")
     assert (fact.kind, fact.value) == ("employer", "Helix Bio")
     assert fact.person_id == "p1"
-    assert fact.person_name == "Dan Kim"
+    assert fact.person_name == "Test Person"
     assert fact.encounter_id == "e1"
 
 

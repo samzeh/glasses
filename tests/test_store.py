@@ -111,9 +111,9 @@ def test_forgetting_a_stranger_is_an_error(tmp_path):
 
 def test_find_by_name_ignores_case_and_padding(tmp_path):
     store = LocalStore.load(tmp_path)
-    store.enroll("Dan Kim", [unit([1.0, 0.0])], consent_note=CONSENT)
+    store.enroll("Test Person", [unit([1.0, 0.0])], consent_note=CONSENT)
 
-    assert store.find_by_name("  dan kim ") is not None
+    assert store.find_by_name("  test person ") is not None
     assert store.find_by_name("Dan") is None
 
 

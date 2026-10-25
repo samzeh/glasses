@@ -18,8 +18,8 @@ they are the whole design:
 
 ``person_name`` is a ``keyword`` with a ``text`` subfield rather than the
 other way round. The exact term is what a filter needs ("facts about
-Dan Kim"), and ES|QL compares keywords; the analysed subfield is there for
-"did I meet a Dan?" where the question is fuzzy.
+Test Person"), and ES|QL compares keywords; the analysed subfield is there for
+"did I meet a Test?" where the question is fuzzy.
 """
 
 from __future__ import annotations

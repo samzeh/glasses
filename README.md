@@ -61,7 +61,7 @@ single template would have given.
 From photos instead, for someone who isn't in front of you:
 
 ```sh
-glasses enroll --name "Dan Kim" --consent "asked him on 2026-10-23" photos/dan/
+glasses enroll --name "Person You Met" --consent "asked them today" photos/person/
 ```
 
 `--consent` is required and the note is stored with the person. That is the
@@ -152,7 +152,7 @@ export CARTESIA_API_KEY=sk_car_…   # Cartesia transcribes; unset means local
 # record yourself for 20 seconds — no audio files needed
 glasses enroll-voice --name "Sam" --consent "myself" --wearer --mic
 
-glasses enroll-voice --name "Dan" --consent "asked him" --mic --seconds 30
+glasses enroll-voice --name "Person You Met" --consent "asked them" --mic --seconds 30
 glasses identify-voice --mic              # listen for 10s and say who it heard
 glasses transcribe conversation.wav       # who said what, attributed
 glasses transcribe conversation.wav --local   # keep it all on this machine
@@ -221,20 +221,9 @@ GEMINI_API_KEY=your-key
 The CLI and `vision_hub.py` load this file at startup. Gemini 3.8 Flash is
 used by default for both extraction and questions.
 
-For a fresh install, load a clearly marked synthetic person first. This
-tests organized storage and Gemini recall without recording anyone:
-
-```sh
-glasses demo-person
-glasses person "Dan Kim" --kind plan
-glasses ask --person "Dan Kim" "What should I follow up on?"
-glasses demo-person --clear
-```
-
-The demo profile has no face template, so it will not appear from camera
-recognition. To test the OLED's face-triggered path, enroll a consenting
-person (you can use your own face), record a meeting with `--remember`, then
-scan that face again.
+To test the OLED's face-triggered path, enroll a consenting person (you can
+use your own face), record a meeting with `--remember`, then scan that face
+again. A face enrollment alone does not create conversation memories.
 
 ```sh
 glasses meet --remember --seconds 60 --location "Cal Hacks"

@@ -112,21 +112,11 @@ def save_encounter(
             fun_fact=fun_fact,
             encounter_id=encounter_id,
             facts=grouped,
-            source="seed" if person_id.startswith("seed-person-") else "capture",
+            source="capture",
         )
     if participants:
         _write_profiles(path, profiles)
     return profiles
-
-
-def remove_profile(path: Path, person_id: str) -> bool:
-    """Remove exactly one profile, used to clear synthetic demo data."""
-    profiles = load_profiles(path)
-    if person_id not in profiles:
-        return False
-    del profiles[person_id]
-    _write_profiles(path, profiles)
-    return True
 
 
 def _write_profiles(path: Path, profiles: dict[str, Profile]) -> None:

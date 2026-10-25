@@ -9,7 +9,7 @@ import pytest
 from glasses.cli import build_parser
 from glasses.profiles import save_encounter
 from glasses.search.documents import PersonFact
-from glasses.search_cli import cmd_ask, cmd_demo_person, cmd_person
+from glasses.search_cli import cmd_ask, cmd_person
 from glasses.voice.transcribe import Utterance
 
 
@@ -47,7 +47,7 @@ def test_json_answer_contains_only_the_answer(tmp_path, monkeypatch, capsys):
 def test_person_command_filters_organized_facts(tmp_path, capsys):
     save_encounter(
         tmp_path / "encounters.json",
-        [Utterance("private transcript", 0, 3, person_id="p1", person_name="Dan Kim")],
+        [Utterance("private transcript", 0, 3, person_id="p1", person_name="Test Person")],
         [
             PersonFact(encounter_id="e1", person_id="p1", kind="plan", value="visit Japan"),
             PersonFact(encounter_id="e1", person_id="p1", kind="school", value="Berkeley"),
@@ -55,20 +55,9 @@ def test_person_command_filters_organized_facts(tmp_path, capsys):
         encounter_id="e1",
         occurred_at="2026-10-24T18:00:00+00:00",
     )
-    assert cmd_person(parse("--store", str(tmp_path), "person", "Dan", "--kind", "plan")) == 0
+    args = parse("--store", str(tmp_path), "person", "Test Person", "--kind", "plan")
+    assert cmd_person(args) == 0
     output = capsys.readouterr().out
     assert "visit Japan" in output
     assert "Berkeley" not in output
     assert "private transcript" not in output
-
-
-def test_demo_person_can_be_loaded_queried_and_cleared(tmp_path, capsys):
-    assert cmd_demo_person(parse("--store", str(tmp_path), "demo-person")) == 0
-    assert cmd_person(parse("--store", str(tmp_path), "person", "Dan Kim", "--kind", "plan")) == 0
-    output = capsys.readouterr().out
-    assert "visit Japan" in output
-    assert "[synthetic demo]" in output
-    assert not (tmp_path / "index.json").exists()  # no face was enrolled
-
-    assert cmd_demo_person(parse("--store", str(tmp_path), "demo-person", "--clear")) == 0
-    assert cmd_person(parse("--store", str(tmp_path), "person", "Dan Kim")) == 1

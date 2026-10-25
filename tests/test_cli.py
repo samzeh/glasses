@@ -215,13 +215,13 @@ def test_people_lists_an_empty_store(tmp_path, capsys):
 
 def test_people_shows_the_consent_record(tmp_path, capsys):
     store = LocalStore.load(tmp_path)
-    store.enroll("Dan Kim", [unit([1.0, 0.0])], consent_note=CONSENT)
+    store.enroll("Test Person", [unit([1.0, 0.0])], consent_note=CONSENT)
     store.save()
 
     cmd_people(parse("--store", str(tmp_path), "people"))
 
     out = capsys.readouterr().out
-    assert "Dan Kim" in out
+    assert "Test Person" in out
     assert CONSENT in out
 
 

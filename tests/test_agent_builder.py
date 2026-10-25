@@ -52,7 +52,7 @@ CONVERSE_RESPONSE = {
         },
     ],
     "model_usage": {"input_tokens": 30345, "output_tokens": 704},
-    "response": {"message": "Dan Kim works at Helix Bio, a biotech company."},
+    "response": {"message": "Test Person works at Helix Bio, a biotech company."},
 }
 
 
@@ -231,7 +231,7 @@ def test_a_conversation_id_is_sent_only_when_continuing_one():
 def test_the_answer_is_read_out_of_the_documented_place():
     answer = Answer.from_response(CONVERSE_RESPONSE)
 
-    assert answer.text == "Dan Kim works at Helix Bio, a biotech company."
+    assert answer.text == "Test Person works at Helix Bio, a biotech company."
     assert answer.conversation_id == "e5b4e3ff-f5c9-4f52-9001-87b403df1a6a"
     assert answer.status == "completed"
 
@@ -262,7 +262,7 @@ def test_the_simple_response_mode_is_also_understood():
     """``response_mode: simple`` returns ``answer`` instead of
     ``response.message``. Accepted so that switching modes does not
     silently print nothing."""
-    assert Answer.from_response({"answer": "Dan Kim."}).text == "Dan Kim."
+    assert Answer.from_response({"answer": "Test Person."}).text == "Test Person."
 
 
 # --- applying the definitions ---------------------------------------------

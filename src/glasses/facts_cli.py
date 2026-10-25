@@ -190,5 +190,5 @@ def cmd_remember(args: argparse.Namespace) -> int:
         print("\n--dry-run: no memories saved")
         return 0
     print(f"\nsaved structured memories for {saved_people} known person/people")
-    print('Now ask: glasses ask "what is Dan planning?"')
+    print('Now ask: glasses ask "what is this person planning?"')
     return 0

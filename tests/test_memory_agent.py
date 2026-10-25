@@ -18,7 +18,7 @@ def test_structured_memories_are_queryable_without_a_transcript(tmp_path):
             start_s=0,
             end_s=4,
             person_id="p1",
-            person_name="Dan Kim",
+            person_name="Test Person",
         ),
         Utterance("I live in Oakland", 5, 8, person_id="p2", person_name="Maya Chen"),
     ]
@@ -44,7 +44,7 @@ def test_structured_memories_are_queryable_without_a_transcript(tmp_path):
     save_encounter(path, spoken, facts, encounter_id="e1", occurred_at="2026-10-24T18:00:00+00:00")
     stored = path.read_text()
     assert "This entire private conversation" not in stored
-    [profile] = find_profiles(path, "dan")
+    [profile] = find_profiles(path, "Test Person")
     assert profile.facts["plan"][0]["topic"] == "next summer"
     assert profile.facts["favorite"][0]["value"] == "Spirited Away"
 
@@ -56,20 +56,16 @@ def test_structured_memories_are_queryable_without_a_transcript(tmp_path):
             "candidates": [
                 {
                     "content": {
-                        "parts": [
-                            {
-                                "text": json.dumps(
-                                    {"answer": "Ask Dan how the Japan trip is coming along."}
-                                )
-                            }
-                        ]
+                        "parts": [{"text": json.dumps({"answer": "Ask about the Japan trip."})}]
                     }
                 }
             ]
         }
         return json.dumps(result).encode()
 
-    response = answer("What should I ask Dan?", path, key="test-key", post=post, person="Dan")
+    response = answer(
+        "What should I ask Test Person?", path, key="test-key", post=post, person="Test Person"
+    )
     assert "Japan trip" in response
     prompt = requests[0]["contents"][0]["parts"][0]["text"]
     assert "visit Japan" in prompt

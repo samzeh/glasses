@@ -392,7 +392,7 @@ def _remember(args, store, face_pipeline, captures, audio_start_us) -> int:  # t
     )
     people_saved = len({u.person_id for u in utterances if u.person_id and not u.is_wearer})
     print(f"\nsaved structured memories for {people_saved} known person/people")
-    print('Now ask: glasses ask "what is Dan building?"')
+    print('Now ask: glasses ask "what is this person building?"')
     return 0
 
 

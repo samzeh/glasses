@@ -223,7 +223,7 @@ def test_a_fact_row_from_the_database_maps_without_a_shim():
     row = {
         "encounter_id": "6f1",
         "person_id": "ab2",
-        "display_name": "Dan Kim",
+        "display_name": "Test Person",
         "kind": "commitment",
         "value": "send the preprint",
         "evidence_span": "I'll send you the preprint",
@@ -235,7 +235,7 @@ def test_a_fact_row_from_the_database_maps_without_a_shim():
 
     fact = PersonFact.from_row(row)
 
-    assert fact.person_name == "Dan Kim"
+    assert fact.person_name == "Test Person"
     assert fact.occurred_at == "2026-10-24T18:12:00Z"
     assert fact.evidence_start_ms == 31000
 
@@ -264,11 +264,11 @@ def test_utterances_become_segments_with_names_resolved():
         encounter_id="e1",
         occurred_at="2026-10-24T18:12:00Z",
         location="Cal Hacks",
-        name_of=lambda person_id: "Dan Kim",
+        name_of=lambda person_id: "Test Person",
     )
 
     assert [s.start_ms for s in segments] == [3250, 8000]
-    assert segments[0].person_name == "Dan Kim"
+    assert segments[0].person_name == "Test Person"
     assert segments[0].location == "Cal Hacks"
     # The wearer's own speech is kept and flagged, not dropped: "what did I
     # promise him?" is a question too.
@@ -433,21 +433,19 @@ def test_seed_people_are_identifiable_as_fake_by_id():
         assert segment.person_id.startswith("seed-person-")
 
 
-def test_the_seed_answers_the_three_demo_questions():
+def test_the_remaining_seed_fixtures_cover_search_fields():
     facts = seed_facts()
     segments = seed_segments()
 
     biotech = {f.person_name for f in facts if f.kind == "industry" and f.value == "biotech"}
-    assert len(biotech) >= 2, "'who works in biotech' needs more than one answer to be a search"
+    assert "Marcus Webb" in biotech
 
-    dan_commitments = [
-        f for f in facts if f.person_name == "Dan Kim" and f.kind == "commitment"
-    ]
-    assert any("send" in f.value for f in dan_commitments)
-    assert all(f.evidence_span for f in dan_commitments), "a fact with no quote is undebuggable"
+    commitments = [f for f in facts if f.person_name == "Elena Garcia" and f.kind == "commitment"]
+    assert any("introduce" in f.value for f in commitments)
+    assert all(f.evidence_span for f in commitments), "a fact with no quote is undebuggable"
 
     cal_hacks = {s.person_name for s in segments if s.location == "Cal Hacks"}
-    assert {"Dan Kim", "Priya Raman", "Marcus Webb"} <= cal_hacks
+    assert {"Priya Raman", "Marcus Webb"} <= cal_hacks
     assert "Elena Garcia" not in cal_hacks, "the location filter needs something to exclude"
 
 

@@ -47,7 +47,7 @@ def resolve(scores: list[PersonScore], config: MatchConfig | None = None) -> Mat
     """Turn ranked person scores into a verdict.
 
     Three outcomes rather than two. The review band below the accept threshold
-    exists because "possibly Dan Kim" is useful and a confident wrong name is
+    exists because "possibly Test Person" is useful and a confident wrong name is
     actively harmful — you will greet someone by a stranger's name on the
     strength of it.
     """
