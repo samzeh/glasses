@@ -197,7 +197,7 @@ That is not a calibration. `voice-eval` does it properly on your voices.
 
 The separate [Voice Notes web app](voice-notes/README.md) saves recordings,
 transcripts, and summaries in TigerData. Those notes are not part of the
-`glasses ask` memory store.
+memory store queried by the glasses CLI.
 
 Gemini transcribes a conversation in memory, then selects facts
 that will help in a later conversation. The transcript is discarded after
