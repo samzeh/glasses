@@ -22,6 +22,7 @@ import numpy as np
 
 from . import env
 from .db_cli import register as register_db
+from .device import glasses_camera
 from .face import FacePipeline, PipelineConfig
 from .face.types import FrameResult, MatchStatus
 from .facts_cli import register as register_facts
@@ -155,6 +156,7 @@ def too_similar(candidate, accepted: list, limit: float) -> bool:
 def capture_enrollment(args: argparse.Namespace, pipeline) -> tuple[list, list, list]:  # type: ignore[no-untyped-def]
     """Collect varied templates from a live camera, with feedback."""
     cv2 = _require_cv2()
+    args.camera = glasses_camera(args.camera)
     capture = cv2.VideoCapture(args.camera)
     if not capture.isOpened():
         print(
@@ -331,6 +333,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     store = open_store(args.store)
     pipeline = build_pipeline(store)
 
+    args.camera = glasses_camera(args.camera)
     capture = cv2.VideoCapture(args.camera)
     if not capture.isOpened():
         print(

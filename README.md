@@ -292,17 +292,21 @@ saved if you explicitly request an audio file.
 For the ESP32 and a 128×64 SSD1306 OLED, install the Python hardware extra
 (`uv pip install -e '.[hardware]'`) and the Arduino **Adafruit GFX** and
 **Adafruit SSD1306** libraries. Flash
-`arduino_smart_glasses.ino/test_arduino.ino`, then run:
+`arduino_smart_glasses.ino/test_arduino.ino` (board: ESP32S3 Dev Module).
+Wiring: touch OUT to GPIO5, OLED SDA to GPIO6 and SCL to GPIO7, OLED VCC to
+5V. The board talks to the laptop over its USB cable. Then run:
 
 ```sh
-export GLASSES_SERIAL_PORT=/dev/cu.usbmodemXXXX  # COM5 on Windows
-export GLASSES_CAMERA_INDEX=0                    # select your camera
+export GLASSES_SERIAL_PORT=/dev/cu.usbmodemXXXX  # only if auto-detection picks wrong
+export GLASSES_CAMERA=C270                       # camera by name; never falls back to another
+export GLASSES_MIC=C270                          # mic name or index (default C270)
 export GLASSES_LOCATION='Cal Hacks'              # optional meeting location
 python vision_hub.py
 ```
 
-Hold the touch pad to start a conversation and hold again to end it. A short
-tap starts or stops live recognition. When a saved face appears, the OLED
+The touch module is in toggle mode, so there is no hold: touch twice quickly
+to start a conversation and twice again to end it. A single touch starts or
+stops live recognition. When a saved face appears, the OLED
 shows name, first meeting date, first meeting location (or `Unknown`), and
 one saved fact (or `None saved`). Text scrolls down one pixel every 160 ms.
 Set `GLASSES_PREVIEW=1` to open camera debug windows with a GUI OpenCV build.

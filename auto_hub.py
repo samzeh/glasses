@@ -33,7 +33,7 @@ from pathlib import Path
 import cv2
 
 from glasses import env
-from glasses.device import LcdNotifier, is_centred, open_camera
+from glasses.device import LcdNotifier, glasses_camera, is_centred, open_camera
 from glasses.encounter.auto import AutoTrigger, FaceSample
 from glasses.encounter.bridge import PORT, TriggerBridge
 from glasses.encounter.clock import Clock
@@ -48,7 +48,9 @@ env.load()
 DEVICE_ID = os.environ.get("GLASSES_DEVICE_ID") or "glasses-auto"
 #: Same names vision_hub.py and the README use, so one rig has one set of
 #: variables rather than two that drift.
-CAMERA_INDEX = int(os.environ.get("GLASSES_CAMERA_INDEX", "1"))
+CAMERA_INDEX = glasses_camera(
+    int(os.environ["GLASSES_CAMERA_INDEX"]) if os.environ.get("GLASSES_CAMERA_INDEX") else None
+)
 #: Where session video goes. ``data/`` is gitignored for exactly this reason.
 SESSION_DIR = Path(os.environ.get("GLASSES_SESSIONS", "data/sessions"))
 #: Detection is the expensive call; tracking carries the boxes between.

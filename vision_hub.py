@@ -6,11 +6,10 @@ from argparse import Namespace
 from contextlib import suppress
 
 import cv2
-import serial
 
 from glasses.autoenroll import MIN_NAME_CONFIDENCE
 from glasses.binding.asd import AsdConfig
-from glasses.device import find_serial_port, open_camera
+from glasses.device import GLASSES_CAMERA, GlassesLink, find_camera_index, open_camera
 from glasses.encounter.clock import Clock, seconds_to_us, us_to_seconds
 from glasses.encounter.record import build_encounter, face_observations, speech_observations
 from glasses.env import load as load_env
@@ -23,9 +22,16 @@ from glasses.voice import VadSegmenter, VoicePipeline, WeSpeakerEmbedder
 
 load_env()
 
-CAMERA_INDEX = int(os.environ.get("GLASSES_CAMERA_INDEX", "1"))
+CAMERA_INDEX = find_camera_index()
+if CAMERA_INDEX is None:
+    sys.exit(f"No {GLASSES_CAMERA} camera found. Plug in the Logitech; the Mac camera is not used.")
 PREVIEW = os.environ.get("GLASSES_PREVIEW") == "1"
-BAUD_RATE = 115200
+#: Microphone to record from: an input index, or part of its name. Defaults
+#: to the C270's own mic; the macOS default input follows whatever headset
+#: is connected rather than the camera on the glasses.
+MIC = os.environ.get("GLASSES_MIC") or GLASSES_CAMERA
+if MIC and MIC.isdigit():
+    MIC = int(MIC)
 #: Which device this is, written on every encounter. One hub per pair of
 #: glasses, so the host name is the honest answer until there are more.
 DEVICE_ID = os.environ.get("GLASSES_DEVICE_ID") or socket.gethostname()
@@ -55,16 +61,21 @@ voice_pipeline = VoicePipeline(
 
 mouths = MouthReader(providers=providers)
 
-SERIAL_PORT = find_serial_port()
-if SERIAL_PORT is None:
-    sys.exit(
-        "No ESP32 serial port found. Plug the glasses in, or set "
-        "GLASSES_SERIAL_PORT to the device (e.g. /dev/cu.usbmodem1234)."
-    )
+try:
+    link = GlassesLink()
+except RuntimeError as error:
+    sys.exit(str(error))
+print(f"Connected to the glasses on {link.port} ({link.oled or 'no boot report'}).")
+print("Waiting for touch sensor input...")
 
-print(f"Connecting to ESP32 on {SERIAL_PORT}...")
-ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-print("Connected! Waiting for touch sensor input...")
+
+def camera_failed():
+    """Say why the session stopped, in the terminal and on the glasses."""
+    print(
+        f"[camera] no frame from the {GLASSES_CAMERA}. If macOS printed 'not authorized', "
+        "allow this terminal app in System Settings > Privacy & Security > Camera."
+    )
+    link.write(b"STATUS:Camera blocked - see laptop\n")
 
 
 def resolve_identities(tracker):
@@ -209,7 +220,7 @@ def resolve_session(
         audio_start_us,
     )
     face_pipeline.gallery = store.gallery("face")
-    ser.write(b"STATUS:Meeting saved\n" if outcome == 0 else b"STATUS:Save failed\n")
+    link.write(b"STATUS:Meeting saved\n" if outcome == 0 else b"STATUS:Save failed\n")
 
 
 is_recording = False
@@ -220,8 +231,10 @@ while True:
         command = pending_command
         pending_command = None
 
-        if not command and ser.in_waiting > 0:
-            command = ser.readline().decode("utf-8").strip()
+        if not command:
+            command = link.poll()
+            if not command:
+                time.sleep(0.02)
 
         # MULTIMODAL RECORDING MODE (Tap & Hold)
         if command == "CAM_ON":
@@ -235,22 +248,22 @@ while True:
             frame_width = None
             is_recording = True
 
-            with AudioRecorder(clock) as recorder:
+            with AudioRecorder(clock, device=MIC) as recorder:
                 started = clock.now_us()
                 prev_frame_time = 0
 
                 while True:
-                    if ser.in_waiting > 0:
-                        inner_cmd = ser.readline().decode("utf-8").strip()
-                        if inner_cmd == "CAM_OFF":
-                            print("Hardware Trigger: Camera & Mic OFF.")
-                            is_recording = False
-                            break
-                        elif inner_cmd:
-                            print(f"ESP32: {inner_cmd}")
+                    inner_cmd = link.poll()
+                    if inner_cmd == "CAM_OFF":
+                        print("Hardware Trigger: Camera & Mic OFF.")
+                        is_recording = False
+                        break
+                    elif inner_cmd:
+                        print(f"ESP32: {inner_cmd}")
 
                     ret, frame = cap.read()
                     if not ret:
+                        camera_failed()
                         break
 
                     frame_width = frame.shape[1]
@@ -322,21 +335,21 @@ while True:
             last_seen_match = 0.0
 
             while True:
-                if ser.in_waiting > 0:
-                    inner_cmd = ser.readline().decode("utf-8").strip()
-                    if inner_cmd == "SNAPSHOT":
-                        print("Hardware Trigger: Continuous Identify Mode OFF.")
-                        ser.write(b"STATUS:Ready\n")
-                        break
-                    elif inner_cmd == "CAM_ON":
-                        print("Hardware Trigger: Overriding Identify Mode with Recording Mode...")
-                        pending_command = "CAM_ON"
-                        break
-                    elif inner_cmd:
-                        print(f"ESP32: {inner_cmd}")
+                inner_cmd = link.poll()
+                if inner_cmd == "SNAPSHOT":
+                    print("Hardware Trigger: Continuous Identify Mode OFF.")
+                    link.write(b"STATUS:Ready\n")
+                    break
+                elif inner_cmd == "CAM_ON":
+                    print("Hardware Trigger: Overriding Identify Mode with Recording Mode...")
+                    pending_command = "CAM_ON"
+                    break
+                elif inner_cmd:
+                    print(f"ESP32: {inner_cmd}")
 
                 ret, frame = cap.read()
                 if not ret:
+                    camera_failed()
                     break
 
                 new_frame_time = time.time()
@@ -387,15 +400,15 @@ while True:
                     if matched_id:
                         profile = load_profiles(profile_path(store)).get(matched_id)
                         if profile:
-                            ser.write(serial_message(profile))
+                            link.write(serial_message(profile))
                         else:
-                            ser.write(
+                            link.write(
                                 f"STATUS:{store.name_of(matched_id)} (no saved meeting)\n".encode(
                                     "ascii", errors="replace"
                                 )
                             )
                     else:
-                        ser.write(b"STATUS:Looking...\n")
+                        link.write(b"STATUS:Looking...\n")
                     last_person_id = matched_id
 
                 cv2.putText(
@@ -404,7 +417,7 @@ while True:
                 if PREVIEW:
                     cv2.imshow("Live Recognition - Single Tap ESP32 to end", frame)
                 if PREVIEW and cv2.waitKey(1) & 0xFF == ord("q"):
-                    ser.write(b"STATUS:Ready\n")
+                    link.write(b"STATUS:Ready\n")
                     break
 
             cap.release()
@@ -419,4 +432,4 @@ while True:
     except KeyboardInterrupt:
         break
 
-ser.close()
+link.close()

@@ -15,6 +15,7 @@ from .attribution import (
 )
 from .autoenroll import MIN_NAME_CONFIDENCE
 from .binding.asd import AsdConfig
+from .device import glasses_camera
 from .encounter.clock import Clock, seconds_to_us, us_to_seconds
 from .face import FacePipeline
 from .face.models import default_providers
@@ -73,6 +74,7 @@ def cmd_meet(args: argparse.Namespace) -> int:
     mouths = MouthReader(providers=providers)
     tracker = FaceTracker()
 
+    args.camera = glasses_camera(args.camera)
     camera = cv2.VideoCapture(args.camera)
     if not camera.isOpened():
         print(f"Could not open camera {args.camera}.", file=sys.stderr)
