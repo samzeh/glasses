@@ -22,6 +22,7 @@ rhythm.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,6 +30,7 @@ import numpy as np
 
 from .binding.asd import AsdConfig, AsdResult, pick_speaker
 from .binding.mouth import MouthSample, mouth_openness
+from .device import AudioFrame, EspSerialStream, TouchEvent
 from .encounter.clock import Clock, seconds_to_us, us_to_seconds
 from .face.types import BBox, Detection
 from .voice.config import SAMPLE_RATE
@@ -131,15 +133,46 @@ class AudioRecorder:
     sentence up against a face.
     """
 
-    def __init__(self, clock: Clock, device: int | None = None) -> None:
+    def __init__(
+        self,
+        clock: Clock,
+        device: int | None = None,
+        *,
+        source: str = "laptop",
+        esp_port: str | None = None,
+        on_touch: Callable[[TouchEvent], None] | None = None,
+    ) -> None:
         self.clock = clock
         self.device = device
+        self.source = source
+        self.esp_port = esp_port
+        self.on_touch = on_touch
         self.start_us: int | None = None
         self._chunks: list[np.ndarray] = []
         self._lock = threading.Lock()
         self._stream = None
+        self._serial: EspSerialStream | None = None
+        self._reader: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._error: Exception | None = None
+        self._device_start_us: int | None = None
+        self._sample_count = 0
 
     def __enter__(self) -> AudioRecorder:
+        if self.source == "esp":
+            if self.device is not None:
+                raise ValueError("--device selects a laptop input; use --esp-port for ESP audio")
+            if not self.esp_port:
+                raise ValueError("ESP audio needs --esp-port")
+            self._serial = EspSerialStream(self.esp_port)
+            self._serial.__enter__()
+            self._reader = threading.Thread(target=self._read_esp, daemon=True)
+            self._reader.start()
+            return self
+        if self.source != "laptop":
+            raise ValueError(f"unknown audio source: {self.source}")
+        if self.esp_port:
+            raise ValueError("--esp-port requires --audio-source esp")
         from .voice.capture import _require_sounddevice
 
         sounddevice = _require_sounddevice()
@@ -160,13 +193,52 @@ class AudioRecorder:
         self._stream.start()
         return self
 
+    def _read_esp(self) -> None:
+        assert self._serial is not None
+        try:
+            while not self._stop.is_set():
+                event = self._serial.read()
+                if isinstance(event, TouchEvent):
+                    if self.on_touch is not None:
+                        self.on_touch(event)
+                elif isinstance(event, AudioFrame):
+                    with self._lock:
+                        if self._device_start_us is None:
+                            self._device_start_us = event.t_us
+                            # The frame arrived after its samples were captured.
+                            self.start_us = self.clock.now_us() - round(
+                                event.samples.size / SAMPLE_RATE * 1_000_000
+                            )
+                        offset = round(
+                            (event.t_us - self._device_start_us) * SAMPLE_RATE / 1_000_000
+                        )
+                        if offset < 0 or offset - self._sample_count > SAMPLE_RATE * 2:
+                            raise ValueError("ESP audio timestamps jumped or the device restarted")
+                        if offset > self._sample_count:
+                            gap = offset - self._sample_count
+                            self._chunks.append(np.zeros(gap, dtype=np.float32))
+                            self._sample_count += gap
+                        samples = event.samples[max(0, self._sample_count - offset) :]
+                        if samples.size:
+                            self._chunks.append(samples)
+                            self._sample_count += samples.size
+        except Exception as error:  # noqa: BLE001 - passed to the capture caller
+            self._error = error
+
     def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        if self._reader is not None:
+            self._reader.join(timeout=1.0)
+        if self._serial is not None:
+            self._serial.__exit__(*exc)
         if self._stream is not None:
             self._stream.stop()
             self._stream.close()
 
     @property
     def samples(self) -> np.ndarray:
+        if self._error is not None:
+            raise self._error
         with self._lock:
             return np.concatenate(self._chunks) if self._chunks else np.zeros(0, dtype=np.float32)
 

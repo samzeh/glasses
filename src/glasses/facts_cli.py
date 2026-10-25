@@ -31,7 +31,12 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     remember.add_argument("audio", nargs="*", type=Path, help="audio files")
     remember.add_argument("--mic", action="store_true", help="record now instead")
     remember.add_argument("--seconds", type=int, default=60, help="how long to record")
-    remember.add_argument("--device", default=None, help="input device for --mic")
+    remember.add_argument("--device", type=int, default=None, help="laptop input device for --mic")
+    remember.add_argument(
+        "--audio-source", choices=("laptop", "esp"), default="laptop",
+        help="live microphone source (default: laptop)",
+    )
+    remember.add_argument("--esp-port", help="ESP serial port when --audio-source esp")
     remember.add_argument("--save", type=Path, default=None, help="keep the recording")
     remember.add_argument("--location", default=None, help="where this happened")
     remember.add_argument("--encounter", default=None, help="encounter id (default: a new one)")
@@ -108,7 +113,9 @@ def cmd_remember(args: argparse.Namespace) -> int:
         from .voice.capture import record_with_meter
 
         print(f"\nListening for {args.seconds}s.\n")
-        samples = record_with_meter(args.seconds, device=args.device)
+        samples = record_with_meter(
+            args.seconds, device=args.device, source=args.audio_source, esp_port=args.esp_port
+        )
         if args.save:
             write_wav(args.save, samples)
         recordings = [("microphone", samples)]

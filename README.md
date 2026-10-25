@@ -115,6 +115,30 @@ Normal, and worth reading rather than fighting. Check in this order:
 
 ## Voice: who is speaking
 
+### Live microphone source
+
+Live commands use the laptop microphone by default. This includes `--mic` on
+`enroll-voice`, `identify-voice`, `transcribe`, and `remember`, plus `meet`.
+Use `--device INDEX` to choose another computer input. To receive ESP audio,
+install `pip install -e '.[voice,device]'` and select it explicitly:
+
+```sh
+glasses identify-voice --mic --audio-source esp --esp-port /dev/tty.usbmodem1234
+glasses meet --audio-source esp --esp-port /dev/tty.usbmodem1234
+```
+
+The ESP sends newline-terminated JSON at 921600 baud. Each message has
+`"v":1` and an ESP monotonic `t_us`. Audio messages use
+`{"v":1,"type":"audio","t_us":123,"sample_rate":16000,"pcm16":"..."}`;
+`pcm16` is base64 of little-endian signed 16-bit mono PCM. Keep audio chunks
+near 100 ms. A touch message on the same serial link uses
+`{"v":1,"type":"touch","t_us":123,"gesture":"single"}` with `single`,
+`double`, or `long` as the gesture. The firmware needs to implement this
+protocol; no ESP sensor or pin mapping is assumed here. If ESP input is
+selected and unavailable, capture fails rather than silently using the laptop.
+For `meet`, the first arriving audio chunk anchors the ESP clock to the host
+clock, so its face/audio alignment should be calibrated on the actual device.
+
 The second identity channel, plus transcription on top of it. Speech-to-text
 alone cannot do this: an STT API transcribes sound, it does not track people
 across recordings. Identity comes from the gallery; the words come from

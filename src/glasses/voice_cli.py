@@ -142,7 +142,9 @@ def cmd_enroll_voice(args: argparse.Namespace) -> int:
         from .voice.capture import record_with_meter
 
         _prompt_for(args.name, args.seconds, wearer=args.wearer)
-        samples = record_with_meter(args.seconds, device=args.device)
+        samples = record_with_meter(
+            args.seconds, device=args.device, source=args.audio_source, esp_port=args.esp_port
+        )
         if args.save:
             write_wav(args.save, samples)
             print(f"  saved {args.save}")
@@ -243,7 +245,9 @@ def cmd_identify_voice(args: argparse.Namespace) -> int:
         from .voice.capture import record_with_meter
 
         print(f"Listening for {args.seconds}s. Talk, or let someone else talk.\n")
-        samples = record_with_meter(args.seconds, device=args.device)
+        samples = record_with_meter(
+            args.seconds, device=args.device, source=args.audio_source, esp_port=args.esp_port
+        )
         if args.save:
             write_wav(args.save, samples)
         recordings = [("microphone", samples)]
@@ -307,7 +311,9 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         from .voice.capture import record_with_meter
 
         print(f"Listening for {args.seconds}s.\n")
-        samples = record_with_meter(args.seconds, device=args.device)
+        samples = record_with_meter(
+            args.seconds, device=args.device, source=args.audio_source, esp_port=args.esp_port
+        )
         if args.save:
             write_wav(args.save, samples)
         recordings = [("microphone", samples)]
@@ -500,6 +506,13 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     transcribe.add_argument("--save", help="also write what it heard to this WAV")
     transcribe.add_argument("audio", nargs="*")
     transcribe.set_defaults(func=cmd_transcribe)
+
+    for live in (enroll, identify, transcribe):
+        live.add_argument(
+            "--audio-source", choices=("laptop", "esp"), default="laptop",
+            help="live microphone source (default: laptop)",
+        )
+        live.add_argument("--esp-port", help="ESP serial port when --audio-source esp")
 
     forget_voice = subparsers.add_parser(
         "forget-voice", help="remove a person's voiceprints, keeping their face"

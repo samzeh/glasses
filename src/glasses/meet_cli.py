@@ -70,7 +70,9 @@ def cmd_meet(args: argparse.Namespace) -> int:
     detections: list = []
     frames_seen = 0
     try:
-        with AudioRecorder(clock, device=args.device) as recorder:
+        with AudioRecorder(
+            clock, device=args.device, source=args.audio_source, esp_port=args.esp_port
+        ) as recorder:
             started = clock.now_us()
             deadline = started + seconds_to_us(args.seconds)
 
@@ -395,6 +397,11 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     meet.add_argument("--seconds", type=int, default=30)
     meet.add_argument("--camera", type=int, default=0)
     meet.add_argument("--device", type=int, default=None, help="audio input index")
+    meet.add_argument(
+        "--audio-source", choices=("laptop", "esp"), default="laptop",
+        help="live microphone source (default: laptop)",
+    )
+    meet.add_argument("--esp-port", help="ESP serial port when --audio-source esp")
     meet.add_argument("--out", default="captures", help="where to write face crops")
     meet.add_argument("--detect-every", type=int, default=5, help="frames between detections")
     meet.add_argument(
