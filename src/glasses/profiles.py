@@ -23,6 +23,7 @@ class Profile:
     fun_fact: str | None
     encounter_id: str
     facts: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    source: str = "capture"
 
 
 def profile_path(store: Any) -> Path:
@@ -70,6 +71,7 @@ def save_encounter(
                 "confidence": fact.confidence,
                 "observed_at": occurred_at,
                 "encounter_id": encounter_id,
+                "source": fact.source,
             }
             bucket = grouped.setdefault(fact.kind, [])
             key = (str(fact.topic or "").casefold(), fact.value.strip().casefold())
@@ -110,16 +112,31 @@ def save_encounter(
             fun_fact=fun_fact,
             encounter_id=encounter_id,
             facts=grouped,
+            source="seed" if person_id.startswith("seed-person-") else "capture",
         )
     if participants:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps({key: asdict(value) for key, value in profiles.items()}, indent=2),
-            encoding="utf-8",
-        )
-        temporary.replace(path)
+        _write_profiles(path, profiles)
     return profiles
+
+
+def remove_profile(path: Path, person_id: str) -> bool:
+    """Remove exactly one profile, used to clear synthetic demo data."""
+    profiles = load_profiles(path)
+    if person_id not in profiles:
+        return False
+    del profiles[person_id]
+    _write_profiles(path, profiles)
+    return True
+
+
+def _write_profiles(path: Path, profiles: dict[str, Profile]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps({key: asdict(value) for key, value in profiles.items()}, indent=2),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def find_profiles(path: Path, query: str) -> list[Profile]:

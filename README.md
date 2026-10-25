@@ -221,13 +221,26 @@ GEMINI_API_KEY=your-key
 The CLI and `vision_hub.py` load this file at startup. Gemini 3.8 Flash is
 used by default for both extraction and questions.
 
+For a fresh install, load a clearly marked synthetic person first. This
+tests organized storage and Gemini recall without recording anyone:
+
+```sh
+glasses demo-person
+glasses person "Dan Kim" --kind plan
+glasses ask --person "Dan Kim" "What should I follow up on?"
+glasses demo-person --clear
+```
+
+The demo profile has no face template, so it will not appear from camera
+recognition. To test the OLED's face-triggered path, enroll a consenting
+person (you can use your own face), record a meeting with `--remember`, then
+scan that face again.
+
 ```sh
 glasses meet --remember --seconds 60 --location "Cal Hacks"
 glasses remember conversation.wav --location "Cal Hacks"
-glasses person "Dan Kim"                    # organized facts, no API call
-glasses person "Dan Kim" --kind plan
-glasses ask "What is Dan building and what should I ask him next?"
-glasses ask --person "Dan Kim" "What should I follow up on?"
+glasses person "Person You Met"              # organized facts, no API call
+glasses ask --person "Person You Met" "What should I follow up on?"
 ```
 
 `meet` uses camera and microphone together: lip sync attributes speech to a

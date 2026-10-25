@@ -22,6 +22,7 @@ conversation transcript. If a detail is absent, say it is not saved. Do not
 guess, and do not treat a past plan or goal as completed. When useful, suggest
 a natural follow-up question about a saved plan, project, or goal.
 If facts conflict, prefer the most recently observed one and say what remains uncertain.
+If a memory has source "seed", clearly say it is synthetic demo data.
 
 Question: {question}
 
@@ -37,6 +38,7 @@ def _context(profiles: dict[str, Profile]) -> list[dict]:
             "name": profile.name,
             "first_met_at": profile.met_at,
             "first_met_location": profile.location,
+            "source": profile.source,
             "facts": profile.facts,
         }
         for profile in profiles.values()

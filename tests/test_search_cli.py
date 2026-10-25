@@ -9,7 +9,7 @@ import pytest
 from glasses.cli import build_parser
 from glasses.profiles import save_encounter
 from glasses.search.documents import PersonFact
-from glasses.search_cli import cmd_ask, cmd_person
+from glasses.search_cli import cmd_ask, cmd_demo_person, cmd_person
 from glasses.voice.transcribe import Utterance
 
 
@@ -60,3 +60,15 @@ def test_person_command_filters_organized_facts(tmp_path, capsys):
     assert "visit Japan" in output
     assert "Berkeley" not in output
     assert "private transcript" not in output
+
+
+def test_demo_person_can_be_loaded_queried_and_cleared(tmp_path, capsys):
+    assert cmd_demo_person(parse("--store", str(tmp_path), "demo-person")) == 0
+    assert cmd_person(parse("--store", str(tmp_path), "person", "Dan Kim", "--kind", "plan")) == 0
+    output = capsys.readouterr().out
+    assert "visit Japan" in output
+    assert "[synthetic demo]" in output
+    assert not (tmp_path / "index.json").exists()  # no face was enrolled
+
+    assert cmd_demo_person(parse("--store", str(tmp_path), "demo-person", "--clear")) == 0
+    assert cmd_person(parse("--store", str(tmp_path), "person", "Dan Kim")) == 1

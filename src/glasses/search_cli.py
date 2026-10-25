@@ -11,6 +11,65 @@ from .facts import DEFAULT_MODEL, GeminiError
 from .memory_agent import answer
 from .profiles import find_profiles, profile_path
 
+DEMO_PERSON_ID = "seed-person-dan"
+
+
+def cmd_demo_person(args: argparse.Namespace) -> int:
+    """Add or remove an obviously synthetic profile for recall testing."""
+    from datetime import UTC, datetime
+
+    from .profiles import load_profiles, remove_profile, save_encounter
+    from .search.config import SOURCE_SEED
+    from .search.documents import PersonFact
+    from .voice.transcribe import Utterance
+
+    path = _memory_path(args)
+    if args.clear:
+        removed = remove_profile(path, DEMO_PERSON_ID)
+        print("Demo profile removed." if removed else "No demo profile to remove.")
+        return 0
+    existing = load_profiles(path).get(DEMO_PERSON_ID)
+    if existing and existing.source != SOURCE_SEED:
+        print("Refusing to overwrite a real profile.", file=sys.stderr)
+        return 1
+    details = (
+        ("name", None, "Dan Kim"),
+        ("age", None, "24"),
+        ("school", None, "UC Berkeley"),
+        ("employer", None, "Helix Bio"),
+        ("occupation", None, "machine learning engineer"),
+        ("hobby", None, "bouldering"),
+        ("family", "sister", "Maya"),
+        ("plan", "next summer", "visit Japan"),
+        ("favorite", "movie", "Spirited Away"),
+        ("project", None, "a cryo-EM map viewer"),
+        ("goal", None, "start a biotech company"),
+    )
+    facts = [
+        PersonFact(
+            encounter_id="seed-encounter-dan",
+            person_id=DEMO_PERSON_ID,
+            person_name="Dan Kim (demo)",
+            kind=kind,
+            topic=topic,
+            value=value,
+            confidence=1.0,
+            source=SOURCE_SEED,
+        )
+        for kind, topic, value in details
+    ]
+    save_encounter(
+        path,
+        [Utterance("", 0, 0, person_id=DEMO_PERSON_ID, person_name="Dan Kim (demo)")],
+        facts,
+        encounter_id="seed-encounter-dan",
+        occurred_at=datetime.now(UTC).isoformat(),
+        location="Cal Hacks (demo)",
+    )
+    print("Saved synthetic Dan Kim profile for CLI testing (no face enrolled).")
+    print('Try: glasses person "Dan Kim" or glasses ask --person "Dan Kim" "What is his plan?"')
+    return 0
+
 
 def _memory_path(args: argparse.Namespace) -> Path:
     return profile_path(args.store or Path("glasses-store"))
@@ -41,7 +100,8 @@ def cmd_person(args: argparse.Namespace) -> int:
         print("No saved person matches that name.")
         return 1
     for profile in matches:
-        print(f"{profile.name} ({profile.person_id})")
+        marker = " [synthetic demo]" if profile.source == "seed" else ""
+        print(f"{profile.name} ({profile.person_id}){marker}")
         print(f"  First met: {profile.met_at} at {profile.location or 'unknown location'}")
         for kind, items in sorted(profile.facts.items()):
             if args.kind and kind != args.kind:
@@ -65,3 +125,7 @@ def register(subparsers) -> None:  # type: ignore[no-untyped-def]
     person.add_argument("name", help="name fragment or person ID")
     person.add_argument("--kind", help="show one fact category, e.g. plan or favorite")
     person.set_defaults(func=cmd_person)
+
+    demo = subparsers.add_parser("demo-person", help="load synthetic Dan Kim memories")
+    demo.add_argument("--clear", action="store_true", help="remove the synthetic profile")
+    demo.set_defaults(func=cmd_demo_person)
