@@ -1,34 +1,34 @@
 import os
 import socket
 import sys
-
-import serial
-import cv2
-import numpy as np
 import time
+from argparse import Namespace
+from contextlib import suppress
 
-from glasses import env
+import cv2
+import serial
+
+from glasses.autoenroll import MIN_NAME_CONFIDENCE
 from glasses.binding.asd import AsdConfig
 from glasses.device import find_serial_port, open_camera
 from glasses.encounter.clock import Clock, seconds_to_us, us_to_seconds
 from glasses.encounter.record import build_encounter, face_observations, speech_observations
+from glasses.env import load as load_env
 from glasses.face import ArcFaceEmbedder, FacePipeline, ScrfdDetector
 from glasses.face.models import default_providers
 from glasses.meet import AudioRecorder, Capture, FaceTracker, MouthReader, assign_speakers
+from glasses.profiles import load_profiles, profile_path, serial_message
 from glasses.storage import open_store, store_label
 from glasses.voice import VadSegmenter, VoicePipeline, WeSpeakerEmbedder
 
-# Before anything reads DATABASE_URL. Only the CLI called this, so running
-# this script in a shell nobody exported into chose the local file store and
-# said nothing about it — the encounters went to JSON instead of Tiger.
-env.load()
+load_env()
 
+CAMERA_INDEX = int(os.environ.get("GLASSES_CAMERA_INDEX", "1"))
+PREVIEW = os.environ.get("GLASSES_PREVIEW") == "1"
 BAUD_RATE = 115200
 #: Which device this is, written on every encounter. One hub per pair of
 #: glasses, so the host name is the honest answer until there are more.
 DEVICE_ID = os.environ.get("GLASSES_DEVICE_ID") or socket.gethostname()
-CAMERA_INDEX = int(os.environ.get("GLASSES_CAMERA", "1"))
-
 
 print("Loading Face and Voice machine learning models...")
 store = open_store()
@@ -43,14 +43,14 @@ providers = default_providers()
 face_pipeline = FacePipeline(
     detector=ScrfdDetector(providers=providers),
     embedder=ArcFaceEmbedder(providers=providers),
-    gallery=store.gallery("face")
+    gallery=store.gallery("face"),
 )
 
 voice_pipeline = VoicePipeline(
     segmenter=VadSegmenter(),
     embedder=WeSpeakerEmbedder(),
     gallery=store.gallery("voice"),
-    wearer_embeddings=store.wearer_embeddings()
+    wearer_embeddings=store.wearer_embeddings(),
 )
 
 mouths = MouthReader(providers=providers)
@@ -65,6 +65,7 @@ if SERIAL_PORT is None:
 print(f"Connecting to ESP32 on {SERIAL_PORT}...")
 ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
 print("Connected! Waiting for touch sensor input...")
+
 
 def resolve_identities(tracker):
     """Who each tracked face is, resolved once for the whole session.
@@ -93,9 +94,7 @@ def record_session(tracker, captures, identities, clock, started_us, ended_us, f
     """
     if not records_encounters:
         return
-    faces = face_observations(
-        list(tracker.tracks.values()), identities, frame_width=frame_width
-    )
+    faces = face_observations(list(tracker.tracks.values()), identities, frame_width=frame_width)
     speech = speech_observations(captures)
     if not faces and not speech:
         print("[DB] nothing observed, no encounter recorded.")
@@ -124,28 +123,38 @@ def resolve_session(
 ):
     print("\n[Processing] Analyzing audio and binding to faces...")
     captures = []
+    # A silent session is still an encounter: the faces seen are worth
+    # recording even when nobody said anything the segmenter could use.
     result = voice_pipeline.process(audio) if audio.size > 0 else None
     for item in result.segments if result else []:
         if item.embedding is None:
             continue
-        captures.append(Capture(
-            start_us=audio_start_us + seconds_to_us(item.segment.start_s),
-            end_us=audio_start_us + seconds_to_us(item.segment.end_s),
-            audio=item.segment.samples,
-            asd=None,
-            track=None,
-            is_wearer=item.is_wearer,
-            voice_person_id=item.match.person_id if item.match else None,
-            voice_name=store.name_of(item.match.person_id) if item.match and item.match.person_id else None,
-            voice_similarity=item.match.similarity if item.match else 0.0
-        ))
-        
+        captures.append(
+            Capture(
+                start_us=audio_start_us + seconds_to_us(item.segment.start_s),
+                end_us=audio_start_us + seconds_to_us(item.segment.end_s),
+                audio=item.segment.samples,
+                asd=None,
+                track=None,
+                is_wearer=item.is_wearer,
+                speaker=item.segment.speaker,
+                voice_person_id=item.match.person_id if item.match else None,
+                voice_name=store.name_of(item.match.person_id)
+                if item.match and item.match.person_id
+                else None,
+                voice_similarity=item.match.similarity if item.match else 0.0,
+            )
+        )
+
     if not captures:
         print("No usable speech detected (requires 3+ continuous seconds).")
 
     partners = [c for c in captures if not c.is_wearer]
     if partners:
-        assign_speakers(partners, tracker, audio, audio_start_us, AsdConfig(min_correlation=0.30, min_margin=0.15))
+        assign_speakers(
+            partners, tracker, audio, audio_start_us,
+            AsdConfig(min_correlation=0.30, min_margin=0.15),
+        )
 
     identities = resolve_identities(tracker)
 
@@ -154,16 +163,16 @@ def resolve_session(
         if capture.is_wearer:
             print(f"[{at:5.1f}s] WEARER (Audio: {capture.duration_s():.1f}s)")
             continue
-            
+
         who = capture.voice_name or "unknown voice"
         line = f"[{at:5.1f}s] {who}"
         if capture.voice_similarity:
             line += f" (voice similarity: {capture.voice_similarity:.2f})"
-            
+
         if capture.track is None:
             print(f"{line}  -> UNASSIGNED: {capture.asd.reason}")
             continue
-            
+
         track = capture.track
         face_id = "new person"
         if track.id in identities:
@@ -172,7 +181,36 @@ def resolve_session(
 
         print(f"{line}  -> face #{track.id} [{face_id}]")
 
+    # The encounter and its observation streams, in TigerData.
     record_session(tracker, captures, identities, clock, started_us, ended_us, frame_width)
+
+    # Finish the encounter after CAM_OFF: transcribe, extract durable facts,
+    # enroll introductions, and save the local display profile. Needs speech
+    # to work with, so a silent session is recorded above and stops here.
+    if not captures:
+        return
+
+    from glasses.meet_cli import _remember
+
+    outcome = _remember(
+        Namespace(
+            encounter=None,
+            location=os.environ.get("GLASSES_LOCATION"),
+            language="en",
+            local=False,
+            gemini_model=None,
+            no_enroll=False,
+            name_confidence=MIN_NAME_CONFIDENCE,
+            dry_run=False,
+        ),
+        store,
+        face_pipeline,
+        captures,
+        audio_start_us,
+    )
+    face_pipeline.gallery = store.gallery("face")
+    ser.write(b"STATUS:Meeting saved\n" if outcome == 0 else b"STATUS:Save failed\n")
+
 
 is_recording = False
 pending_command = None
@@ -183,7 +221,7 @@ while True:
         pending_command = None
 
         if not command and ser.in_waiting > 0:
-            command = ser.readline().decode('utf-8').strip()
+            command = ser.readline().decode("utf-8").strip()
 
         # MULTIMODAL RECORDING MODE (Tap & Hold)
         if command == "CAM_ON":
@@ -200,10 +238,10 @@ while True:
             with AudioRecorder(clock) as recorder:
                 started = clock.now_us()
                 prev_frame_time = 0
-                
+
                 while True:
                     if ser.in_waiting > 0:
-                        inner_cmd = ser.readline().decode('utf-8').strip()
+                        inner_cmd = ser.readline().decode("utf-8").strip()
                         if inner_cmd == "CAM_OFF":
                             print("Hardware Trigger: Camera & Mic OFF.")
                             is_recording = False
@@ -226,29 +264,47 @@ while True:
 
                     if frames_seen % 5 == 1 or not detections:
                         detections = face_pipeline.detector.detect(frame)
-                    
+
                     tracker.update(detections, frame, at_us)
-                    
+
                     for track in tracker.active(at_us):
                         if track.current_detection is not None:
                             sample = mouths.sample(frame, track.current_detection, at_us)
                             if sample is not None:
                                 track.mouth.append(sample)
-                                
-                        box = track.bbox
-                        cv2.rectangle(frame, (int(box.x1), int(box.y1)), (int(box.x2), int(box.y2)), (0, 200, 200), 2)
-                        cv2.putText(frame, f"Track #{track.id}", (int(box.x1), max(16, int(box.y1) - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 200), 2)
 
-                    cv2.putText(frame, f"FPS: {fps}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
-                    cv2.imshow("Multimodal Feed - Tap ESP32 to end", frame)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        box = track.bbox
+                        cv2.rectangle(
+                            frame,
+                            (int(box.x1), int(box.y1)),
+                            (int(box.x2), int(box.y2)),
+                            (0, 200, 200),
+                            2,
+                        )
+                        cv2.putText(
+                            frame,
+                            f"Track #{track.id}",
+                            (int(box.x1), max(16, int(box.y1) - 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            (0, 200, 200),
+                            2,
+                        )
+
+                    cv2.putText(
+                        frame, f"FPS: {fps}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2
+                    )
+                    if PREVIEW:
+                        cv2.imshow("Multimodal Feed - Tap ESP32 to end", frame)
+                    if PREVIEW and cv2.waitKey(1) & 0xFF == ord("q"):
                         break
 
             audio = recorder.samples
             audio_start_us = recorder.start_us or started
             ended = clock.now_us()
             cap.release()
-            cv2.destroyWindow("Multimodal Feed - Tap ESP32 to end")
+            if PREVIEW:
+                cv2.destroyWindow("Multimodal Feed - Tap ESP32 to end")
 
             # Runs even with no audio: the faces seen are still an encounter,
             # and a silent one is the expired case the schema has a state for.
@@ -262,14 +318,15 @@ while True:
             cap = open_camera(CAMERA_INDEX)
 
             prev_frame_time = 0
-            last_lcd_update = 0
+            last_person_id = None
+            last_seen_match = 0.0
 
             while True:
                 if ser.in_waiting > 0:
-                    inner_cmd = ser.readline().decode('utf-8').strip()
+                    inner_cmd = ser.readline().decode("utf-8").strip()
                     if inner_cmd == "SNAPSHOT":
                         print("Hardware Trigger: Continuous Identify Mode OFF.")
-                        ser.write(b"LCD:Ready\n")
+                        ser.write(b"STATUS:Ready\n")
                         break
                     elif inner_cmd == "CAM_ON":
                         print("Hardware Trigger: Overriding Identify Mode with Recording Mode...")
@@ -288,39 +345,72 @@ while True:
                 prev_frame_time = new_frame_time
 
                 result = face_pipeline.process_frame(frame)
-                lcd_name = "Unknown"
-                
+                matched_id = None
+                best_rank = (-1, -1.0)
+
                 if result.faces:
                     for face in result.faces:
                         box = face.detection.bbox
                         if face.match is not None and face.match.is_identified:
                             name = store.name_of(face.match.person_id)
-                            lcd_name = name
+                            rank = (int(face.is_primary), face.match.similarity)
+                            if rank > best_rank:
+                                matched_id = face.match.person_id
+                                best_rank = rank
                             display_text = f"{name} ({face.match.similarity:.2f})"
                             color = (0, 255, 0)
                         else:
                             display_text = "Unknown person"
                             color = (0, 0, 255)
-                            
-                        cv2.rectangle(frame, (int(box.x1), int(box.y1)), (int(box.x2), int(box.y2)), color, 2)
-                        cv2.putText(frame, display_text, (int(box.x1), max(16, int(box.y1) - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-                # Send update to LCD every 0.5 seconds to avoid flooding serial
-                if time.time() - last_lcd_update > 0.5:
-                    ser.write(f"LCD:{lcd_name}\n".encode('utf-8'))
-                    last_lcd_update = time.time()
+                        cv2.rectangle(
+                            frame, (int(box.x1), int(box.y1)), (int(box.x2), int(box.y2)), color, 2
+                        )
+                        cv2.putText(
+                            frame,
+                            display_text,
+                            (int(box.x1), max(16, int(box.y1) - 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            color,
+                            2,
+                        )
 
-                cv2.putText(frame, f"FPS: {fps}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
-                cv2.imshow("Live Recognition - Single Tap ESP32 to end", frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    ser.write(b"LCD:Ready\n")
+                # Send once per identity change so the OLED can scroll the
+                # entire profile without restarting on every camera frame.
+                if matched_id:
+                    last_seen_match = time.monotonic()
+                elif last_person_id and time.monotonic() - last_seen_match < 3.0:
+                    matched_id = last_person_id
+
+                if matched_id != last_person_id:
+                    if matched_id:
+                        profile = load_profiles(profile_path(store)).get(matched_id)
+                        if profile:
+                            ser.write(serial_message(profile))
+                        else:
+                            ser.write(
+                                f"STATUS:{store.name_of(matched_id)} (no saved meeting)\n".encode(
+                                    "ascii", errors="replace"
+                                )
+                            )
+                    else:
+                        ser.write(b"STATUS:Looking...\n")
+                    last_person_id = matched_id
+
+                cv2.putText(
+                    frame, f"FPS: {fps}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2
+                )
+                if PREVIEW:
+                    cv2.imshow("Live Recognition - Single Tap ESP32 to end", frame)
+                if PREVIEW and cv2.waitKey(1) & 0xFF == ord("q"):
+                    ser.write(b"STATUS:Ready\n")
                     break
 
             cap.release()
-            try:
-                cv2.destroyWindow("Live Recognition - Single Tap ESP32 to end")
-            except cv2.error:
-                pass  # Window was already closed or never created
+            if PREVIEW:
+                with suppress(cv2.error):
+                    cv2.destroyWindow("Live Recognition - Single Tap ESP32 to end")
             time.sleep(0.01)
 
         elif command:

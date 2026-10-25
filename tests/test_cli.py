@@ -97,8 +97,20 @@ def test_every_subcommand_parses():
         ("transcribe", "--language", "es", "a.wav"),
         ("voice-compare", "a.wav", "b.wav"),
         ("voice-eval", "recordings/"),
+        ("ask", "what is Dan planning?"),
+        ("person", "Dan", "--kind", "plan"),
     ):
         assert parse(*argv).command == argv[0]
+
+
+def test_remember_partner_count_parses_and_defaults_to_none():
+    assert parse("remember", "conversation.wav").partners is None
+    assert parse("remember", "--partners", "1", "conversation.wav").partners == 1
+
+
+def test_transcript_indexing_is_not_exposed():
+    with pytest.raises(SystemExit):
+        parse("search-index", "conversation.wav")
 
 
 def test_enroll_requires_a_consent_note():
@@ -208,13 +220,13 @@ def test_people_lists_an_empty_store(tmp_path, capsys):
 
 def test_people_shows_the_consent_record(tmp_path, capsys):
     store = LocalStore.load(tmp_path)
-    store.enroll("Dan Kim", [unit([1.0, 0.0])], consent_note=CONSENT)
+    store.enroll("Test Person", [unit([1.0, 0.0])], consent_note=CONSENT)
     store.save()
 
     cmd_people(parse("--store", str(tmp_path), "people"))
 
     out = capsys.readouterr().out
-    assert "Dan Kim" in out
+    assert "Test Person" in out
     assert CONSENT in out
 
 

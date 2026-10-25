@@ -46,7 +46,9 @@ from glasses.storage import open_store, store_label
 env.load()
 
 DEVICE_ID = os.environ.get("GLASSES_DEVICE_ID") or "glasses-auto"
-CAMERA_INDEX = int(os.environ.get("GLASSES_CAMERA", "0"))
+#: Same names vision_hub.py and the README use, so one rig has one set of
+#: variables rather than two that drift.
+CAMERA_INDEX = int(os.environ.get("GLASSES_CAMERA_INDEX", "1"))
 #: Where session video goes. ``data/`` is gitignored for exactly this reason.
 SESSION_DIR = Path(os.environ.get("GLASSES_SESSIONS", "data/sessions"))
 #: Detection is the expensive call; tracking carries the boxes between.
@@ -56,7 +58,9 @@ DETECT_EVERY = 5
 RECOGNISE_EVERY = 15
 #: Nominal rate written into the video container.
 VIDEO_FPS = 15.0
-SHOW_WINDOW = os.environ.get("GLASSES_HEADLESS", "") == ""
+#: Off by default: a pair of glasses has no monitor, and a GUI-less OpenCV
+#: build raises rather than ignoring imshow.
+PREVIEW = os.environ.get("GLASSES_PREVIEW") == "1"
 
 
 def build_pipeline(store):
@@ -190,7 +194,7 @@ def main() -> int:
 
     camera = open_camera(CAMERA_INDEX)
     if not camera.isOpened():
-        print(f"Could not open camera {CAMERA_INDEX}. Set GLASSES_CAMERA to another index.")
+        print(f"Could not open camera {CAMERA_INDEX}. Set GLASSES_CAMERA_INDEX to another index.")
         return 1
 
     identities: dict[int, tuple[str | None, float]] = {}
@@ -233,7 +237,7 @@ def main() -> int:
                     identities.clear()
 
                 lcd.show(status_line(state))
-                if SHOW_WINDOW:
+                if PREVIEW:
                     _draw(frame, tracker, at_us, state)
                     cv2.imshow("Auto capture - q to quit", frame)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -248,7 +252,7 @@ def main() -> int:
                 sink.finish(keep=False)
             camera.release()
             lcd.close()
-            if SHOW_WINDOW:
+            if PREVIEW:
                 cv2.destroyAllWindows()
     return 0
 
